@@ -2,13 +2,15 @@ import AppKit
 import SwiftUI
 import WebKit
 import AVFoundation
+import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover = NSPopover()
-    private var eventMonitor: Any?
     private var contextMenu: NSMenu = NSMenu()
     private weak var webViewRef: WKWebView?
+    private let settings = AppSettings()
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -28,31 +30,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        popover.behavior = .applicationDefined
-        popover.animates = false
-        popover.contentSize = NSSize(width: 420, height: 640)
-        popover.contentViewController = NSHostingController(rootView: WebContainerView(onCreate: { [weak self] webView in
+        applyPopoverBehavior()
+        popover.animates = true
+        popover.contentSize = settings.popupSizePreset.contentSize
+        popover.contentViewController = NSHostingController(rootView: PopoverRootView(settings: settings, onWebViewCreate: { [weak self] webView in
             self?.webViewRef = webView
         }))
-    _ = popover.contentViewController?.view
 
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self = self, self.popover.isShown else { return }
-            
-            if let button = self.statusItem.button,
-               let window = button.window,
-               window.isVisible,
-               let eventWindow = event.window,
-               eventWindow != window {
-                let popoverFrame = self.popover.contentViewController?.view.window?.frame ?? .zero
-                let clickPoint = event.locationInWindow
-                let screenPoint = eventWindow.convertToScreen(NSRect(origin: clickPoint, size: .zero)).origin
-                
-                if !popoverFrame.contains(screenPoint) && !window.frame.contains(screenPoint) {
-                    self.closePopover(sender: nil)
-                }
+        _ = popover.contentViewController?.view
+
+        settings.$popupSizePreset
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyPopoverSize(animated: true)
             }
-        }
+            .store(in: &cancellables)
+
+        settings.$retainPopupFocus
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyPopoverBehavior()
+                self?.buildContextMenu()
+            }
+            .store(in: &cancellables)
 
         configureCookiePersistence()
 
@@ -63,14 +65,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        if let monitor = eventMonitor { NSEvent.removeMonitor(monitor) }
-    }
+    func applicationWillTerminate(_ notification: Notification) {}
 
     @objc private func togglePopover(_ sender: Any?) {
         if popover.isShown {
             closePopover(sender: sender)
         } else if let button = statusItem.button {
+            applyPopoverSize(animated: false)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
     }
@@ -109,11 +110,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         clear.target = self
         contextMenu.addItem(clear)
 
+        let retain = NSMenuItem(title: "Retain Popup Focus", action: #selector(toggleRetainPopupFocus), keyEquivalent: "")
+        retain.target = self
+        retain.state = settings.retainPopupFocus ? .on : .off
+        contextMenu.addItem(retain)
+
         contextMenu.addItem(NSMenuItem.separator())
 
         let quit = NSMenuItem(title: "Quit GrokBar", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         contextMenu.addItem(quit)
+    }
+
+    @objc private func toggleRetainPopupFocus() {
+        settings.retainPopupFocus.toggle()
     }
 
     @objc private func clearCaches() {
@@ -136,6 +146,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    private func applyPopoverBehavior() {
+        if settings.retainPopupFocus {
+            popover.behavior = .applicationDefined
+        } else {
+            popover.behavior = .transient
+        }
+    }
+
+    private func applyPopoverSize(animated: Bool) {
+        let targetContentSize = settings.popupSizePreset.contentSize
+        popover.contentSize = targetContentSize
+
+        guard popover.isShown,
+              let window = popover.contentViewController?.view.window else {
+            return
+        }
+
+        let currentFrame = window.frame
+        let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: targetContentSize)).size
+
+        var nextFrame = currentFrame
+        nextFrame.size = targetFrameSize
+        nextFrame.origin.x = currentFrame.minX
+        nextFrame.origin.y = currentFrame.maxY - targetFrameSize.height
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                window.animator().setFrame(nextFrame, display: true)
+            }
+        } else {
+            window.setFrame(nextFrame, display: true)
+        }
     }
 
     private func loadStatusBarIconFromPNG(size: CGSize) -> NSImage? {
@@ -162,8 +208,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct WebContainerView: NSViewRepresentable {
+    @ObservedObject var settings: AppSettings
     var onCreate: ((WKWebView) -> Void)? = nil
-    func makeNSView(context: Context) -> WKWebView {
+
+    func makeNSView(context: Context) -> NSView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         if #available(macOS 11.0, *) {
@@ -176,21 +224,80 @@ struct WebContainerView: NSViewRepresentable {
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
 
-    let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: config)
         webView.customUserAgent = nil
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
-    onCreate?(webView)
+        onCreate?(webView)
+
+        let container = NSView(frame: .zero)
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        // Blur overlay for resize feedback
+        let blurOverlay = NSVisualEffectView()
+        blurOverlay.material = .fullScreenUI
+        blurOverlay.blendingMode = .withinWindow
+        blurOverlay.state = .active
+        blurOverlay.alphaValue = 0
+        blurOverlay.isHidden = true
+        blurOverlay.translatesAutoresizingMaskIntoConstraints = false
+        blurOverlay.identifier = NSUserInterfaceItemIdentifier("resizeBlurOverlay")
+        container.addSubview(blurOverlay)
+
+        NSLayoutConstraint.activate([
+            blurOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            blurOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            blurOverlay.topAnchor.constraint(equalTo: container.topAnchor),
+            blurOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        // Snapshot image view to freeze content during resize
+        let snapshotView = NSImageView()
+        snapshotView.imageScaling = .scaleProportionallyUpOrDown
+        snapshotView.alphaValue = 0
+        snapshotView.isHidden = true
+        snapshotView.translatesAutoresizingMaskIntoConstraints = false
+        snapshotView.identifier = NSUserInterfaceItemIdentifier("resizeSnapshotView")
+        container.addSubview(snapshotView)
+
+        NSLayoutConstraint.activate([
+            snapshotView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            snapshotView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            snapshotView.topAnchor.constraint(equalTo: container.topAnchor),
+            snapshotView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        let handle = ResizeHandleView(settings: settings)
+        handle.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(handle)
+
+        NSLayoutConstraint.activate([
+            handle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
+            handle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            handle.widthAnchor.constraint(equalToConstant: 20),
+            handle.heightAnchor.constraint(equalToConstant: 56)
+        ])
 
         if let url = URL(string: "https://grok.com/") {
             let req = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30)
             webView.load(req)
         }
-        return webView
+
+        return container
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {}
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -246,6 +353,203 @@ struct WebContainerView: NSViewRepresentable {
             } else {
                 decisionHandler(.prompt)
             }
+        }
+    }
+}
+
+final class ResizeHandleView: NSVisualEffectView {
+    private let settings: AppSettings
+
+    private var startContinuousIndex: CGFloat?
+    private var startWindowFrame: NSRect?
+
+    init(settings: AppSettings) {
+        self.settings = settings
+        super.init(frame: .zero)
+
+        material = .hudWindow
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        alphaValue = 0.85
+
+        // Three horizontal lines as a drag indicator (like a grip)
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.distribution = .equalSpacing
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        for _ in 0..<3 {
+            let line = NSView()
+            line.wantsLayer = true
+            line.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.5).cgColor
+            line.layer?.cornerRadius = 1.5
+            line.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(line)
+            NSLayoutConstraint.activate([
+                line.widthAnchor.constraint(equalToConstant: 10),
+                line.heightAnchor.constraint(equalToConstant: 3)
+            ])
+        }
+
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+
+        let pan = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        addGestureRecognizer(pan)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            animator().alphaValue = 1.0
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.15
+            animator().alphaValue = 0.85
+        }
+    }
+
+    @objc private func handlePan(_ recognizer: NSPanGestureRecognizer) {
+        guard let window = self.window else { return }
+
+        let presets = PopupSizePreset.allCases.map { $0.contentSize }
+        guard presets.count == 4 else { return }
+
+        let translation = recognizer.translation(in: self)
+        // Dragging DOWN (positive y) should make popup LARGER, so we negate y
+        let scalar = -translation.y
+
+        // Drag farther -> proportionally larger/smaller, smoothly.
+        let pointsPerPresetStep: CGFloat = 80
+
+        // Find the overlay views in the content view
+        let blurOverlay = window.contentView?.subviews.first(where: {
+            $0.identifier == NSUserInterfaceItemIdentifier("resizeBlurOverlay")
+        }) as? NSVisualEffectView
+
+        let snapshotView = window.contentView?.subviews.first(where: {
+            $0.identifier == NSUserInterfaceItemIdentifier("resizeSnapshotView")
+        }) as? NSImageView
+
+        // Find the webview to hide during resize
+        let webView = window.contentView?.subviews.first(where: { $0 is WKWebView }) as? WKWebView
+
+        switch recognizer.state {
+        case .began:
+            startContinuousIndex = CGFloat(settings.popupSizePreset.index)
+            startWindowFrame = window.frame
+
+            // Take a snapshot of the webview and show it
+            if let webView = webView {
+                let bitmapRep = webView.bitmapImageRepForCachingDisplay(in: webView.bounds)
+                if let bitmapRep = bitmapRep {
+                    webView.cacheDisplay(in: webView.bounds, to: bitmapRep)
+                    let image = NSImage(size: webView.bounds.size)
+                    image.addRepresentation(bitmapRep)
+                    snapshotView?.image = image
+                }
+            }
+
+            // Show snapshot and blur, hide webview for smooth resize
+            snapshotView?.isHidden = false
+            blurOverlay?.isHidden = false
+            snapshotView?.alphaValue = 1
+            blurOverlay?.alphaValue = 0.5
+            webView?.alphaValue = 0
+
+        case .changed:
+            guard let startIndex = startContinuousIndex,
+                  let startFrame = startWindowFrame else { return }
+
+            let rawIndex = startIndex + (scalar / pointsPerPresetStep)
+            let clamped = max(0, min(CGFloat(presets.count - 1), rawIndex))
+
+            let lower = Int(floor(clamped))
+            let upper = Int(ceil(clamped))
+            let t = clamped - CGFloat(lower)
+
+            let a = presets[lower]
+            let b = presets[upper]
+            let interpolated = NSSize(
+                width: a.width + (b.width - a.width) * t,
+                height: a.height + (b.height - a.height) * t
+            )
+
+            let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: interpolated)).size
+            var nextFrame = startFrame
+            nextFrame.size = targetFrameSize
+            nextFrame.origin.x = startFrame.minX
+            nextFrame.origin.y = startFrame.maxY - targetFrameSize.height
+
+            // Direct frame update for smooth real-time resizing
+            window.setFrame(nextFrame, display: false)
+
+        case .ended, .cancelled, .failed:
+            defer {
+                startContinuousIndex = nil
+                startWindowFrame = nil
+            }
+
+            guard let startIndex = startContinuousIndex,
+                  let startFrame = startWindowFrame else { return }
+
+            let rawIndex = startIndex + (scalar / pointsPerPresetStep)
+            let snapped = Int((max(0, min(CGFloat(presets.count - 1), rawIndex))).rounded())
+            let preset = PopupSizePreset.from(index: snapped)
+
+            // Animate to final snapped size
+            let finalSize = preset.contentSize
+            let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: finalSize)).size
+            var finalFrame = startFrame
+            finalFrame.size = targetFrameSize
+            finalFrame.origin.x = startFrame.minX
+            finalFrame.origin.y = startFrame.maxY - targetFrameSize.height
+
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.2
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(finalFrame, display: false)
+            }, completionHandler: {
+                // Restore webview and hide snapshot/blur
+                webView?.alphaValue = 1
+                snapshotView?.alphaValue = 0
+                blurOverlay?.alphaValue = 0
+                snapshotView?.isHidden = true
+                blurOverlay?.isHidden = true
+                snapshotView?.image = nil
+
+                if preset != self.settings.popupSizePreset {
+                    self.settings.popupSizePreset = preset
+                }
+            })
+
+        default:
+            break
         }
     }
 }
