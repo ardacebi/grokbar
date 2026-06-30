@@ -13,7 +13,7 @@ final class PopoverPresentationPolicyTests: XCTestCase {
     }
 
     func testLetterAndNumberKeysDoNotDismiss() {
-        let typingKeyCodes: [UInt16] = [0, 8, 14, 18, 29, 35, 46, 48, 53]
+        let typingKeyCodes: [UInt16] = [0, 8, 14, 18, 29, 35, 46, 48, 52]
         for keyCode in typingKeyCodes {
             XCTAssertTrue(
                 PopoverPresentationPolicy.isTypingKeyCode(keyCode),
@@ -26,8 +26,32 @@ final class PopoverPresentationPolicyTests: XCTestCase {
         }
     }
 
+    func testEscapeDismissesButIsNotTyping() {
+        XCTAssertFalse(PopoverPresentationPolicy.isTypingKeyCode(PopoverPresentationPolicy.escapeKeyCode))
+        XCTAssertTrue(
+            PopoverPresentationPolicy.shouldDismissForKeyEvent(
+                type: .keyDown,
+                keyCode: PopoverPresentationPolicy.escapeKeyCode
+            )
+        )
+        XCTAssertEqual(
+            PopoverPresentationPolicy.closeReason(forKeyCode: PopoverPresentationPolicy.escapeKeyCode),
+            .escapeKey
+        )
+    }
+
     func testNonTypingKeysMayDismiss() {
         XCTAssertTrue(PopoverPresentationPolicy.shouldDismissForKeyEvent(type: .keyDown, keyCode: 55))
+    }
+
+    func testIntentionalCloseReasonsAreAllowed() {
+        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .statusItemToggle))
+        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick))
+        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .escapeKey))
+    }
+
+    func testSystemCloseRequestsAreBlocked() {
+        XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .systemRequest))
     }
 
     func testMouseDownOutsideDismissesButInsideDoesNot() {

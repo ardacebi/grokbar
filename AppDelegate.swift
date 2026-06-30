@@ -13,6 +13,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var localKeyMonitor: Any?
     private var outsideClickMonitor: Any?
+    private var pendingCloseReason: PopoverPresentationPolicy.CloseReason = .systemRequest
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -72,13 +73,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     @objc private func togglePopover(_ sender: Any?) {
         if popover.isShown {
-            closePopover(sender: sender)
+            closePopover(sender: sender, reason: .statusItemToggle)
         } else if let button = statusItem.button {
             showPopover(relativeTo: button)
         }
     }
 
     private func showPopover(relativeTo button: NSStatusBarButton) {
+        pendingCloseReason = .systemRequest
         applyPopoverSize(animated: false)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         startPopoverMonitors()
@@ -90,15 +92,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             NSApp.activate(ignoringOtherApps: true)
         }
 
+        applyFocusToPopoverContent()
+
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.popover.isShown else { return }
-            guard let window = self.popover.contentViewController?.view.window else { return }
+            self?.applyFocusToPopoverContent()
+        }
+    }
 
-            window.makeKeyAndOrderFront(nil)
+    private func applyFocusToPopoverContent() {
+        guard popover.isShown,
+              let window = popover.contentViewController?.view.window else {
+            return
+        }
 
-            if let webView = self.webViewRef {
-                window.makeFirstResponder(webView)
-            }
+        window.makeKeyAndOrderFront(nil)
+
+        if let webView = webViewRef {
+            window.makeFirstResponder(webView)
         }
     }
 
@@ -107,16 +117,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.popover.isShown else { return event }
+
+            if let closeReason = PopoverPresentationPolicy.closeReason(forKeyCode: event.keyCode) {
+                self.closePopover(sender: nil, reason: closeReason)
+                return nil
+            }
+
             if PopoverPresentationPolicy.shouldDismissForKeyEvent(type: event.type, keyCode: event.keyCode) {
                 return event
             }
 
-            if let window = self.popover.contentViewController?.view.window,
-               let webView = self.webViewRef,
-               window.firstResponder !== webView {
-                window.makeFirstResponder(webView)
-            }
-
+            self.applyFocusToPopoverContent()
             return event
         }
 
@@ -135,7 +146,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 popoverFrame: window.frame,
                 statusItemFrame: statusItemFrame
             ) {
-                self.closePopover(sender: nil)
+                self.closePopover(sender: nil, reason: .outsideClick)
             }
         }
     }
@@ -165,13 +176,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         }
     }
 
-    private func closePopover(sender: Any?) {
+    private func closePopover(
+        sender: Any?,
+        reason: PopoverPresentationPolicy.CloseReason = .statusItemToggle
+    ) {
+        guard popover.isShown else { return }
+
         stopPopoverMonitors()
-        popover.performClose(sender)
+        pendingCloseReason = reason
+
+        if PopoverPresentationPolicy.shouldClosePopover(for: reason) {
+            popover.performClose(sender)
+            if popover.isShown {
+                popover.close()
+            }
+        }
+
+        pendingCloseReason = .systemRequest
     }
 
     func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        false
+        PopoverPresentationPolicy.shouldClosePopover(for: pendingCloseReason)
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        retainPopoverFocus()
     }
 
     private func configureCookiePersistence() {
