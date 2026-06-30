@@ -10,12 +10,16 @@ final class PopoverCloseFlowTests: XCTestCase {
     }
 
     func testCloseFlowBlocksIncidentalSystemDismissButAllowsToggle() {
+        let controller = PopoverSessionController(osMajorVersion: 27)
+        controller.prepareForTestingShown()
+
         XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .systemRequest))
-        XCTAssertFalse(
-            PopoverPresentationPolicy.shouldDismissForKeyEvent(
-                type: .keyDown,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode
-            )
+        XCTAssertEqual(
+            controller.handleLocalKeyDown(
+                keyCode: PopoverPresentationPolicy.spaceKeyCode,
+                eventType: .keyDown
+            ),
+            .consumeAndInsertSpace
         )
         XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .statusItemToggle))
     }

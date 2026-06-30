@@ -11,19 +11,38 @@ enum PopoverPresentationPolicy {
         case systemRequest
     }
 
-    static var isMacOS27OrLater: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
+    enum KeyMonitorAction: Equatable {
+        case passThrough
+        case consumeAndInsertSpace
+        case close(CloseReason)
     }
 
-    static func popoverBehavior(retainFocus: Bool) -> NSPopover.Behavior {
-        if isMacOS27OrLater || retainFocus {
+    static func isMacOS27OrLater(
+        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> Bool {
+        osMajorVersion >= 27
+    }
+
+    static func popoverBehavior(
+        retainFocus: Bool,
+        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> NSPopover.Behavior {
+        if isMacOS27OrLater(osMajorVersion: osMajorVersion) || retainFocus {
             return .applicationDefined
         }
         return .transient
     }
 
-    static func shouldActivateApplicationOnShow() -> Bool {
-        isMacOS27OrLater
+    static func shouldActivateApplicationOnShow(
+        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> Bool {
+        isMacOS27OrLater(osMajorVersion: osMajorVersion)
+    }
+
+    static func shouldUseAnchoredPanel(
+        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> Bool {
+        isMacOS27OrLater(osMajorVersion: osMajorVersion)
     }
 
     static func shouldClosePopover(for reason: CloseReason) -> Bool {
@@ -37,6 +56,29 @@ enum PopoverPresentationPolicy {
 
     static func closeReason(forKeyCode keyCode: UInt16) -> CloseReason? {
         keyCode == escapeKeyCode ? .escapeKey : nil
+    }
+
+    static func keyMonitorAction(
+        isShown: Bool,
+        keyCode: UInt16,
+        eventType: NSEvent.EventType,
+        osMajorVersion: Int
+    ) -> KeyMonitorAction {
+        guard isShown else { return .passThrough }
+
+        if let closeReason = closeReason(forKeyCode: keyCode) {
+            return .close(closeReason)
+        }
+
+        if keyCode == spaceKeyCode && isMacOS27OrLater(osMajorVersion: osMajorVersion) {
+            return .consumeAndInsertSpace
+        }
+
+        if isTypingKeyCode(keyCode) {
+            return .passThrough
+        }
+
+        return .passThrough
     }
 
     static func shouldDismissForKeyEvent(type: NSEvent.EventType, keyCode: UInt16) -> Bool {
@@ -69,4 +111,36 @@ enum PopoverPresentationPolicy {
         if let statusItemFrame, statusItemFrame.contains(screenLocation) { return false }
         return true
     }
+
+    static func panelFrame(
+        anchor: NSRect,
+        contentSize: NSSize
+    ) -> NSRect {
+        NSRect(
+            x: anchor.midX - contentSize.width / 2,
+            y: anchor.minY - contentSize.height,
+            width: contentSize.width,
+            height: contentSize.height
+        )
+    }
+
+    static let spaceInsertionScript = """
+    (function() {
+      const el = document.activeElement;
+      if (!el) { return false; }
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        const start = el.selectionStart ?? el.value.length;
+        const end = el.selectionEnd ?? el.value.length;
+        el.value = el.value.slice(0, start) + ' ' + el.value.slice(end);
+        el.selectionStart = el.selectionEnd = start + 1;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }
+      if (el.isContentEditable) {
+        document.execCommand('insertText', false, ' ');
+        return true;
+      }
+      return false;
+    })();
+    """
 }

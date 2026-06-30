@@ -4,16 +4,13 @@ import WebKit
 import AVFoundation
 import Combine
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover = NSPopover()
+    private let popupController = PopoverSessionController()
     private var contextMenu: NSMenu = NSMenu()
     private weak var webViewRef: WKWebView?
     private let settings = AppSettings()
     private var cancellables = Set<AnyCancellable>()
-    private var localKeyMonitor: Any?
-    private var outsideClickMonitor: Any?
-    private var pendingCloseReason: PopoverPresentationPolicy.CloseReason = .systemRequest
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -33,15 +30,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        applyPopoverBehavior()
-        popover.delegate = self
-        popover.animates = true
-        popover.contentSize = settings.popupSizePreset.contentSize
-        popover.contentViewController = NSHostingController(rootView: PopoverRootView(settings: settings, onWebViewCreate: { [weak self] webView in
-            self?.webViewRef = webView
-        }))
+        popupController.retainFocus = settings.retainPopupFocus
+        let hostingController = NSHostingController(
+            rootView: PopoverRootView(settings: settings, onWebViewCreate: { [weak self] webView in
+                self?.webViewRef = webView
+                self?.popupController.registerWebView(webView)
+            })
+        )
+        popupController.configure(hostingController: hostingController)
+        popupController.applyBehavior()
+        popupController.setContentSize(settings.popupSizePreset.contentSize)
 
-        _ = popover.contentViewController?.view
+        _ = hostingController.view
 
         settings.$popupSizePreset
             .dropFirst()
@@ -55,8 +55,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.applyPopoverBehavior()
-                self?.buildContextMenu()
+                guard let self else { return }
+                self.popupController.retainFocus = self.settings.retainPopupFocus
+                self.popupController.applyBehavior()
+                self.buildContextMenu()
             }
             .store(in: &cancellables)
 
@@ -72,94 +74,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationWillTerminate(_ notification: Notification) {}
 
     @objc private func togglePopover(_ sender: Any?) {
-        if popover.isShown {
-            closePopover(sender: sender, reason: .statusItemToggle)
-        } else if let button = statusItem.button {
-            showPopover(relativeTo: button)
-        }
-    }
-
-    private func showPopover(relativeTo button: NSStatusBarButton) {
-        pendingCloseReason = .systemRequest
+        guard let button = statusItem.button else { return }
         applyPopoverSize(animated: false)
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        startPopoverMonitors()
-        retainPopoverFocus()
-    }
-
-    private func retainPopoverFocus() {
-        if PopoverPresentationPolicy.shouldActivateApplicationOnShow() {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        applyFocusToPopoverContent()
-
-        DispatchQueue.main.async { [weak self] in
-            self?.applyFocusToPopoverContent()
-        }
-    }
-
-    private func applyFocusToPopoverContent() {
-        guard popover.isShown,
-              let window = popover.contentViewController?.view.window else {
-            return
-        }
-
-        window.makeKeyAndOrderFront(nil)
-
-        if let webView = webViewRef {
-            window.makeFirstResponder(webView)
-        }
-    }
-
-    private func startPopoverMonitors() {
-        stopPopoverMonitors()
-
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.popover.isShown else { return event }
-
-            if let closeReason = PopoverPresentationPolicy.closeReason(forKeyCode: event.keyCode) {
-                self.closePopover(sender: nil, reason: closeReason)
-                return nil
-            }
-
-            if PopoverPresentationPolicy.shouldDismissForKeyEvent(type: event.type, keyCode: event.keyCode) {
-                return event
-            }
-
-            self.applyFocusToPopoverContent()
-            return event
-        }
-
-        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, self.popover.isShown else { return }
-            guard let window = self.popover.contentViewController?.view.window else { return }
-
-            let screenLocation = NSEvent.mouseLocation
-            let statusItemFrame = self.statusItem.button?.window?.convertToScreen(
-                self.statusItem.button?.convert(self.statusItem.button?.bounds ?? .zero, to: nil) ?? .zero
-            )
-
-            if PopoverPresentationPolicy.shouldDismissForMouseEvent(
-                type: event.type,
-                screenLocation: screenLocation,
-                popoverFrame: window.frame,
-                statusItemFrame: statusItemFrame
-            ) {
-                self.closePopover(sender: nil, reason: .outsideClick)
-            }
-        }
-    }
-
-    private func stopPopoverMonitors() {
-        if let localKeyMonitor {
-            NSEvent.removeMonitor(localKeyMonitor)
-            self.localKeyMonitor = nil
-        }
-        if let outsideClickMonitor {
-            NSEvent.removeMonitor(outsideClickMonitor)
-            self.outsideClickMonitor = nil
-        }
+        popupController.toggle(relativeTo: button, contentSize: settings.popupSizePreset.contentSize)
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
@@ -174,33 +91,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         default:
             togglePopover(sender)
         }
-    }
-
-    private func closePopover(
-        sender: Any?,
-        reason: PopoverPresentationPolicy.CloseReason = .statusItemToggle
-    ) {
-        guard popover.isShown else { return }
-
-        stopPopoverMonitors()
-        pendingCloseReason = reason
-
-        if PopoverPresentationPolicy.shouldClosePopover(for: reason) {
-            popover.performClose(sender)
-            if popover.isShown {
-                popover.close()
-            }
-        }
-
-        pendingCloseReason = .systemRequest
-    }
-
-    func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        PopoverPresentationPolicy.shouldClosePopover(for: pendingCloseReason)
-    }
-
-    func popoverDidShow(_ notification: Notification) {
-        retainPopoverFocus()
     }
 
     private func configureCookiePersistence() {
@@ -257,16 +147,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         NSApp.terminate(nil)
     }
 
-    private func applyPopoverBehavior() {
-        popover.behavior = PopoverPresentationPolicy.popoverBehavior(retainFocus: settings.retainPopupFocus)
-    }
-
     private func applyPopoverSize(animated: Bool) {
         let targetContentSize = settings.popupSizePreset.contentSize
-        popover.contentSize = targetContentSize
+        popupController.setContentSize(targetContentSize)
 
-        guard popover.isShown,
-              let window = popover.contentViewController?.view.window else {
+        guard popupController.isShown,
+              let window = popupController.presentationWindow else {
             return
         }
 

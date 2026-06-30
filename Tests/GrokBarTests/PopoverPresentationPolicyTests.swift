@@ -105,17 +105,42 @@ final class PopoverPresentationPolicyTests: XCTestCase {
     }
 
     func testMacOS27ForcesApplicationDefinedBehaviorEvenWithoutRetainFocus() {
-        guard PopoverPresentationPolicy.isMacOS27OrLater else {
-            XCTAssertEqual(
-                PopoverPresentationPolicy.popoverBehavior(retainFocus: false),
-                .transient
-            )
-            return
-        }
-
         XCTAssertEqual(
-            PopoverPresentationPolicy.popoverBehavior(retainFocus: false),
+            PopoverPresentationPolicy.popoverBehavior(retainFocus: false, osMajorVersion: 14),
+            .transient
+        )
+        XCTAssertEqual(
+            PopoverPresentationPolicy.popoverBehavior(retainFocus: false, osMajorVersion: 27),
             .applicationDefined
         )
+    }
+
+    func testMacOS27ConsumesSpaceInKeyMonitorAction() {
+        XCTAssertEqual(
+            PopoverPresentationPolicy.keyMonitorAction(
+                isShown: true,
+                keyCode: PopoverPresentationPolicy.spaceKeyCode,
+                eventType: .keyDown,
+                osMajorVersion: 27
+            ),
+            .consumeAndInsertSpace
+        )
+    }
+
+    func testMacOS14PassesSpaceThroughInKeyMonitorAction() {
+        XCTAssertEqual(
+            PopoverPresentationPolicy.keyMonitorAction(
+                isShown: true,
+                keyCode: PopoverPresentationPolicy.spaceKeyCode,
+                eventType: .keyDown,
+                osMajorVersion: 14
+            ),
+            .passThrough
+        )
+    }
+
+    func testShouldUseAnchoredPanelOnlyOnMacOS27() {
+        XCTAssertFalse(PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: 14))
+        XCTAssertTrue(PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: 27))
     }
 }
