@@ -36,6 +36,7 @@ final class PopoverSessionController: NSObject {
     private var localKeyMonitor: Any?
     private var outsideClickMonitor: Any?
     private var pendingCloseReason: PopoverPresentationPolicy.CloseReason = .systemRequest
+    private var isAnimating = false
 
     var retainFocus: Bool = true
     var onWebViewCreate: ((WKWebView) -> Void)?
@@ -92,11 +93,15 @@ final class PopoverSessionController: NSObject {
 
         if let panel {
             panel.contentViewController = hostingController
-            panel.setFrame(anchoredFrame(for: button, contentSize: contentSize), display: false)
-            panel.orderFront(nil)
-            isShown = true
-            startMonitors()
-            retainFocusForTyping()
+            let finalFrame = anchoredFrame(for: button, contentSize: contentSize)
+            isAnimating = true
+            PopupPresentationAnimation.present(panel, finalFrame: finalFrame) { [weak self] in
+                guard let self else { return }
+                self.isAnimating = false
+                self.isShown = true
+                self.startMonitors()
+                self.retainFocusForTyping()
+            }
             return
         }
 
@@ -120,7 +125,14 @@ final class PopoverSessionController: NSObject {
         }
 
         if let panel {
-            panel.orderOut(nil)
+            isAnimating = true
+            PopupPresentationAnimation.dismiss(panel) { [weak self] in
+                guard let self else { return }
+                self.isAnimating = false
+                self.isShown = false
+                self.pendingCloseReason = .systemRequest
+            }
+            return
         } else if let popover {
             popover.performClose(nil)
             if popover.isShown {
@@ -133,6 +145,8 @@ final class PopoverSessionController: NSObject {
     }
 
     func toggle(relativeTo button: NSStatusBarButton, contentSize: NSSize) {
+        guard !isAnimating else { return }
+
         if isShown {
             close(reason: .statusItemToggle)
         } else {
