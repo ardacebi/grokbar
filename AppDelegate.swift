@@ -228,6 +228,7 @@ struct WebContainerView: NSViewRepresentable {
 
         let container = NSView(frame: .zero)
         container.translatesAutoresizingMaskIntoConstraints = false
+        PopupChromeStyle.apply(to: container)
 
         webView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(webView)

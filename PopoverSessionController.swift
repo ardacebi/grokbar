@@ -20,6 +20,12 @@ final class MenuBarPopupPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        titlebarAppearsTransparent = true
+    }
+
+    func applyContentChrome() {
+        guard let view = contentViewController?.view else { return }
+        PopupChromeStyle.apply(to: view)
     }
 }
 
@@ -59,6 +65,7 @@ final class PopoverSessionController: NSObject {
         if PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: osMajorVersion) {
             let popupPanel = MenuBarPopupPanel(contentSize: hostingController.view.frame.size)
             popupPanel.contentViewController = hostingController
+            popupPanel.applyContentChrome()
             panel = popupPanel
         } else {
             let legacyPopover = NSPopover()
@@ -93,6 +100,7 @@ final class PopoverSessionController: NSObject {
 
         if let panel {
             panel.contentViewController = hostingController
+            panel.applyContentChrome()
             let finalFrame = anchoredFrame(for: button, contentSize: contentSize)
             isAnimating = true
             PopupPresentationAnimation.present(panel, finalFrame: finalFrame) { [weak self] in

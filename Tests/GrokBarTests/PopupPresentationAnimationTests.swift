@@ -16,4 +16,15 @@ final class PopupPresentationAnimationTests: XCTestCase {
         XCTAssertEqual(PopupPresentationAnimation.openDuration, 0.15, accuracy: 0.001)
         XCTAssertLessThan(PopupPresentationAnimation.closeDuration, PopupPresentationAnimation.openDuration)
     }
+
+    func testPopupChromeUsesSlightCornerRadius() {
+        XCTAssertEqual(PopupChromeStyle.cornerRadius, 12)
+        XCTAssertGreaterThan(PopupChromeStyle.cornerRadius, 0)
+
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
+        PopupChromeStyle.apply(to: view)
+
+        XCTAssertEqual(view.layer?.cornerRadius, PopupChromeStyle.cornerRadius)
+        XCTAssertTrue(view.layer?.masksToBounds == true)
+    }
 }
