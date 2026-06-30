@@ -11,7 +11,24 @@ let package = Package(
         .executableTarget(
             name: "GrokBar",
             path: ".",
-            exclude: ["GrokBar.xcodeproj", "Assets.xcassets", "Info.plist", "README.md"]
+            exclude: [
+                "GrokBar.xcodeproj",
+                "Assets.xcassets",
+                "Info.plist",
+                "README.md",
+                "Tests",
+                "GrokBar.app",
+                "build_app.sh",
+                "GrokBar.entitlements",
+                "BundleResources.json",
+                "grok-small.png",
+                "Icon_GrokBar.icon"
+            ]
+        ),
+        .testTarget(
+            name: "GrokBarTests",
+            dependencies: ["GrokBar"],
+            path: "Tests/GrokBarTests"
         )
     ]
 )
