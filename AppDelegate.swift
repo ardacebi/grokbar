@@ -6,11 +6,20 @@ import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private let popupController = PopoverSessionController()
+    let popupController: PopoverSessionController
     private var contextMenu: NSMenu = NSMenu()
     private weak var webViewRef: WKWebView?
     private let settings = AppSettings()
     private var cancellables = Set<AnyCancellable>()
+
+    init(popupController: PopoverSessionController = PopoverSessionController()) {
+        self.popupController = popupController
+        super.init()
+    }
+
+    var statusItemButtonForTesting: NSStatusBarButton? {
+        statusItem?.button
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -73,7 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {}
 
-    @objc private func togglePopover(_ sender: Any?) {
+    @objc func togglePopover(_ sender: Any?) {
         guard let button = statusItem.button else { return }
         applyPopoverSize(animated: false)
         popupController.toggle(relativeTo: button, contentSize: settings.popupSizePreset.contentSize)
@@ -147,7 +156,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    private func applyPopoverSize(animated: Bool) {
+    func applyPopoverSize(animated: Bool) {
         let targetContentSize = settings.popupSizePreset.contentSize
         popupController.setContentSize(targetContentSize)
 

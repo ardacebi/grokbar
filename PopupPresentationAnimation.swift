@@ -22,12 +22,14 @@ enum PopupPresentationAnimation {
     static func present(
         _ panel: NSWindow,
         finalFrame: NSRect,
+        onPresented: (() -> Void)? = nil,
         completion: @escaping () -> Void
     ) {
         let startFrame = openingStartFrame(finalFrame: finalFrame)
         panel.setFrame(startFrame, display: false)
         panel.alphaValue = 0
         panel.orderFront(nil)
+        onPresented?()
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = openDuration

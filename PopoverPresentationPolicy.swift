@@ -59,12 +59,12 @@ enum PopoverPresentationPolicy {
     }
 
     static func keyMonitorAction(
-        isShown: Bool,
+        isPopupActive: Bool,
         keyCode: UInt16,
         eventType: NSEvent.EventType,
         osMajorVersion: Int
     ) -> KeyMonitorAction {
-        guard isShown else { return .passThrough }
+        guard isPopupActive else { return .passThrough }
 
         if let closeReason = closeReason(forKeyCode: keyCode) {
             return .close(closeReason)
@@ -126,20 +126,45 @@ enum PopoverPresentationPolicy {
 
     static let spaceInsertionScript = """
     (function() {
-      const el = document.activeElement;
-      if (!el) { return false; }
-      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-        const start = el.selectionStart ?? el.value.length;
-        const end = el.selectionEnd ?? el.value.length;
-        el.value = el.value.slice(0, start) + ' ' + el.value.slice(end);
-        el.selectionStart = el.selectionEnd = start + 1;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
+      function insertSpace(el) {
+        if (!el) { return false; }
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+          const start = el.selectionStart ?? el.value.length;
+          const end = el.selectionEnd ?? el.value.length;
+          el.value = el.value.slice(0, start) + ' ' + el.value.slice(end);
+          el.selectionStart = el.selectionEnd = start + 1;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+        if (el.isContentEditable) {
+          el.focus();
+          document.execCommand('insertText', false, ' ');
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+        return false;
       }
-      if (el.isContentEditable) {
-        document.execCommand('insertText', false, ' ');
-        return true;
+
+      if (insertSpace(document.activeElement)) { return true; }
+
+      const selectors = [
+        'textarea',
+        'input[type="text"]',
+        'input:not([type])',
+        '[contenteditable="true"]',
+        '[role="textbox"]'
+      ];
+
+      for (const selector of selectors) {
+        for (const candidate of document.querySelectorAll(selector)) {
+          if (candidate.offsetParent === null) { continue; }
+          if (insertSpace(candidate)) {
+            candidate.focus();
+            return true;
+          }
+        }
       }
+
       return false;
     })();
     """

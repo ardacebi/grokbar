@@ -27,10 +27,24 @@ final class MenuBarPopupPanel: NSPanel {
         guard let view = contentViewController?.view else { return }
         PopupChromeStyle.apply(to: view)
     }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown,
+           let responder = firstResponder,
+           responder !== self {
+            responder.keyDown(with: event)
+            return
+        }
+        super.sendEvent(event)
+    }
 }
 
 final class PopoverSessionController: NSObject {
     private(set) var isShown = false
+    private(set) var isOpening = false
+    private(set) var isAnimating = false
+
+    var isPopupActive: Bool { isShown || isOpening }
 
     private let osMajorVersion: Int
     private var panel: MenuBarPopupPanel?
@@ -42,7 +56,6 @@ final class PopoverSessionController: NSObject {
     private var localKeyMonitor: Any?
     private var outsideClickMonitor: Any?
     private var pendingCloseReason: PopoverPresentationPolicy.CloseReason = .systemRequest
-    private var isAnimating = false
 
     var retainFocus: Bool = true
     var onWebViewCreate: ((WKWebView) -> Void)?
@@ -85,7 +98,7 @@ final class PopoverSessionController: NSObject {
 
     func setContentSize(_ size: NSSize) {
         popover?.contentSize = size
-        if let panel, isShown {
+        if let panel, isPopupActive {
             var frame = panel.frame
             frame.size = size
             frame.origin.y = frame.maxY - size.height
@@ -102,14 +115,25 @@ final class PopoverSessionController: NSObject {
             panel.contentViewController = hostingController
             panel.applyContentChrome()
             let finalFrame = anchoredFrame(for: button, contentSize: contentSize)
+
+            isOpening = true
             isAnimating = true
-            PopupPresentationAnimation.present(panel, finalFrame: finalFrame) { [weak self] in
-                guard let self else { return }
-                self.isAnimating = false
-                self.isShown = true
-                self.startMonitors()
-                self.retainFocusForTyping()
-            }
+            startMonitors()
+
+            PopupPresentationAnimation.present(
+                panel,
+                finalFrame: finalFrame,
+                onPresented: { [weak self] in
+                    self?.establishTypingFocus()
+                },
+                completion: { [weak self] in
+                    guard let self else { return }
+                    self.isAnimating = false
+                    self.isOpening = false
+                    self.isShown = true
+                    self.establishTypingFocus()
+                }
+            )
             return
         }
 
@@ -118,22 +142,26 @@ final class PopoverSessionController: NSObject {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         isShown = popover.isShown
         startMonitors()
-        retainFocusForTyping()
+        establishTypingFocus()
     }
 
     func close(reason: PopoverPresentationPolicy.CloseReason) {
-        guard isShown else { return }
+        guard isPopupActive else { return }
 
         stopMonitors()
         pendingCloseReason = reason
 
         guard PopoverPresentationPolicy.shouldClosePopover(for: reason) else {
             pendingCloseReason = .systemRequest
+            if isOpening {
+                isOpening = false
+            }
             return
         }
 
         if let panel {
             isAnimating = true
+            isOpening = false
             PopupPresentationAnimation.dismiss(panel) { [weak self] in
                 guard let self else { return }
                 self.isAnimating = false
@@ -155,35 +183,24 @@ final class PopoverSessionController: NSObject {
     func toggle(relativeTo button: NSStatusBarButton, contentSize: NSSize) {
         guard !isAnimating else { return }
 
-        if isShown {
+        if isPopupActive {
             close(reason: .statusItemToggle)
         } else {
             show(relativeTo: button, contentSize: contentSize)
         }
     }
 
-    func retainFocusForTyping() {
-        if PopoverPresentationPolicy.shouldActivateApplicationOnShow(osMajorVersion: osMajorVersion) {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        applyFocusToContent()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyFocusToContent()
-        }
-    }
-
-    func applyFocusToContent() {
-        guard isShown, let window = presentationWindow else { return }
-        window.makeKeyAndOrderFront(nil)
-        if let webView = webViewRef {
-            window.makeFirstResponder(webView)
-        }
+    func establishTypingFocus() {
+        PopupFocusEstablishment.establish(
+            window: presentationWindow,
+            webView: webViewRef,
+            osMajorVersion: osMajorVersion
+        )
     }
 
     func handleLocalKeyDown(keyCode: UInt16, eventType: NSEvent.EventType) -> PopoverPresentationPolicy.KeyMonitorAction {
         PopoverPresentationPolicy.keyMonitorAction(
-            isShown: isShown,
+            isPopupActive: isPopupActive,
             keyCode: keyCode,
             eventType: eventType,
             osMajorVersion: osMajorVersion
@@ -197,10 +214,6 @@ final class PopoverSessionController: NSObject {
     func registerWebView(_ webView: WKWebView) {
         webViewRef = webView
         onWebViewCreate?(webView)
-    }
-
-    func prepareForTestingShown() {
-        isShown = true
     }
 
     func anchoredFrame(for button: NSStatusBarButton, contentSize: NSSize) -> NSRect {
@@ -220,10 +233,10 @@ final class PopoverSessionController: NSObject {
 
             switch self.handleLocalKeyDown(keyCode: event.keyCode, eventType: event.type) {
             case .passThrough:
-                self.applyFocusToContent()
+                self.establishTypingFocus()
                 return event
             case .consumeAndInsertSpace:
-                self.applyFocusToContent()
+                self.establishTypingFocus()
                 self.injectSpaceIntoWebView()
                 return nil
             case .close(let reason):
@@ -270,7 +283,7 @@ extension PopoverSessionController: NSPopoverDelegate {
 
     func popoverDidShow(_ notification: Notification) {
         isShown = true
-        retainFocusForTyping()
+        establishTypingFocus()
     }
 
     func popoverDidClose(_ notification: Notification) {
