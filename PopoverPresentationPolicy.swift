@@ -45,10 +45,12 @@ enum PopoverPresentationPolicy {
         isMacOS27OrLater(osMajorVersion: osMajorVersion)
     }
 
-    static func shouldClosePopover(for reason: CloseReason) -> Bool {
+    static func shouldClosePopover(for reason: CloseReason, retainFocus: Bool = false) -> Bool {
         switch reason {
-        case .statusItemToggle, .outsideClick, .escapeKey:
+        case .statusItemToggle, .escapeKey:
             return true
+        case .outsideClick:
+            return !retainFocus
         case .systemRequest:
             return false
         }
@@ -56,6 +58,13 @@ enum PopoverPresentationPolicy {
 
     static func closeReason(forKeyCode keyCode: UInt16) -> CloseReason? {
         keyCode == escapeKeyCode ? .escapeKey : nil
+    }
+
+    static func shouldInterceptSpaceKey(
+        isPopupActive: Bool,
+        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> Bool {
+        isPopupActive && isMacOS27OrLater(osMajorVersion: osMajorVersion)
     }
 
     static func keyMonitorAction(
@@ -66,12 +75,15 @@ enum PopoverPresentationPolicy {
     ) -> KeyMonitorAction {
         guard isPopupActive else { return .passThrough }
 
-        if let closeReason = closeReason(forKeyCode: keyCode) {
-            return .close(closeReason)
+        if keyCode == spaceKeyCode && shouldInterceptSpaceKey(
+            isPopupActive: true,
+            osMajorVersion: osMajorVersion
+        ) {
+            return .consumeAndInsertSpace
         }
 
-        if keyCode == spaceKeyCode && isMacOS27OrLater(osMajorVersion: osMajorVersion) {
-            return .consumeAndInsertSpace
+        if let closeReason = closeReason(forKeyCode: keyCode) {
+            return .close(closeReason)
         }
 
         if isTypingKeyCode(keyCode) {
@@ -104,21 +116,26 @@ enum PopoverPresentationPolicy {
         type: NSEvent.EventType,
         screenLocation: NSPoint,
         popoverFrame: NSRect,
-        statusItemFrame: NSRect?
+        statusItemFrame: NSRect?,
+        retainFocus: Bool = false
     ) -> Bool {
+        guard !retainFocus else { return false }
         guard type == .leftMouseDown || type == .rightMouseDown else { return false }
         if popoverFrame.contains(screenLocation) { return false }
         if let statusItemFrame, statusItemFrame.contains(screenLocation) { return false }
         return true
     }
 
+    static let screenMargin: CGFloat = 8
+
     static func panelFrame(
-        anchor: NSRect,
-        contentSize: NSSize
+        visibleFrame: NSRect,
+        contentSize: NSSize,
+        margin: CGFloat = screenMargin
     ) -> NSRect {
         NSRect(
-            x: anchor.midX - contentSize.width / 2,
-            y: anchor.minY - contentSize.height,
+            x: visibleFrame.maxX - contentSize.width - margin,
+            y: visibleFrame.maxY - contentSize.height - margin,
             width: contentSize.width,
             height: contentSize.height
         )

@@ -45,6 +45,8 @@ final class AppSettings: ObservableObject {
         static let retainPopupFocus = "retainPopupFocus"
     }
 
+    var isUpdatingFromResizeHandle = false
+
     @Published var popupSizePreset: PopupSizePreset {
         didSet {
             UserDefaults.standard.set(popupSizePreset.rawValue, forKey: Keys.popupSizePreset)
@@ -70,5 +72,12 @@ final class AppSettings: ObservableObject {
         } else {
             self.retainPopupFocus = UserDefaults.standard.bool(forKey: Keys.retainPopupFocus)
         }
+    }
+
+    func updatePresetFromResizeHandle(_ preset: PopupSizePreset) {
+        guard preset != popupSizePreset else { return }
+        isUpdatingFromResizeHandle = true
+        popupSizePreset = preset
+        isUpdatingFromResizeHandle = false
     }
 }

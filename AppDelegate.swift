@@ -5,14 +5,19 @@ import AVFoundation
 import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     let popupController: PopoverSessionController
     private var contextMenu: NSMenu = NSMenu()
     private weak var webViewRef: WKWebView?
     private let settings = AppSettings()
     private var cancellables = Set<AnyCancellable>()
 
-    init(popupController: PopoverSessionController = PopoverSessionController()) {
+    override init() {
+        self.popupController = PopoverSessionController()
+        super.init()
+    }
+
+    init(popupController: PopoverSessionController) {
         self.popupController = popupController
         super.init()
     }
@@ -22,9 +27,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = item
+        if let button = item.button {
             if let img = loadStatusBarIconFromPNG(size: CGSize(width: 17, height: 16)) {
                 img.isTemplate = true
                 button.image = img
@@ -49,6 +56,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popupController.configure(hostingController: hostingController)
         popupController.applyBehavior()
         popupController.setContentSize(settings.popupSizePreset.contentSize)
+        popupController.onPopupActiveChanged = { [weak self] active in
+            guard let self else { return }
+            if active {
+                StatusItemHighlight.setHighlighted(true, on: self.statusItem?.button)
+            } else {
+                StatusItemHighlight.clear(on: self.statusItem?.button)
+            }
+        }
 
         _ = hostingController.view
 
@@ -56,7 +71,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.applyPopoverSize(animated: true)
+                guard let self, !self.settings.isUpdatingFromResizeHandle else { return }
+                self.applyPopoverSize(animated: true)
             }
             .store(in: &cancellables)
 
@@ -71,44 +87,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        configureCookiePersistence()
-
-    buildContextMenu()
-
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-
-        }
+        buildContextMenu()
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 
     func applicationWillTerminate(_ notification: Notification) {}
 
     @objc func togglePopover(_ sender: Any?) {
-        guard let button = statusItem.button else { return }
+        guard let button = statusItem?.button else { return }
         applyPopoverSize(animated: false)
         popupController.toggle(relativeTo: button, contentSize: settings.popupSizePreset.contentSize)
+        if !popupController.isPopupActive {
+            StatusItemHighlight.clear(on: button)
+        }
     }
 
     @objc private func statusItemClicked(_ sender: Any?) {
         guard let event = NSApp.currentEvent else { togglePopover(sender); return }
         switch event.type {
         case .rightMouseUp:
-            if let button = statusItem.button {
-                statusItem.menu = contextMenu
+            if let item = statusItem, let button = item.button {
+                item.menu = contextMenu
                 button.performClick(nil)
-                DispatchQueue.main.async { [weak self] in self?.statusItem.menu = nil }
+                DispatchQueue.main.async { [weak self] in self?.statusItem?.menu = nil }
             }
         default:
             togglePopover(sender)
-        }
-    }
-
-    private func configureCookiePersistence() {
-        let dataStore = WKWebsiteDataStore.default()
-        dataStore.httpCookieStore.getAllCookies { cookies in
-            for cookie in cookies {
-                var props = cookie.properties ?? [:]
-                props[.discard] = false
-            }
         }
     }
 
@@ -161,17 +165,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popupController.setContentSize(targetContentSize)
 
         guard popupController.isShown,
-              let window = popupController.presentationWindow else {
+              let window = popupController.presentationWindow,
+              let screen = window.screen else {
             return
         }
 
-        let currentFrame = window.frame
-        let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: targetContentSize)).size
-
-        var nextFrame = currentFrame
-        nextFrame.size = targetFrameSize
-        nextFrame.origin.x = currentFrame.minX
-        nextFrame.origin.y = currentFrame.maxY - targetFrameSize.height
+        let nextFrame = PopoverPresentationPolicy.panelFrame(
+            visibleFrame: screen.visibleFrame,
+            contentSize: targetContentSize
+        )
 
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
@@ -247,40 +249,6 @@ struct WebContainerView: NSViewRepresentable {
             webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             webView.topAnchor.constraint(equalTo: container.topAnchor),
             webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-
-        // Blur overlay for resize feedback
-        let blurOverlay = NSVisualEffectView()
-        blurOverlay.material = .fullScreenUI
-        blurOverlay.blendingMode = .withinWindow
-        blurOverlay.state = .active
-        blurOverlay.alphaValue = 0
-        blurOverlay.isHidden = true
-        blurOverlay.translatesAutoresizingMaskIntoConstraints = false
-        blurOverlay.identifier = NSUserInterfaceItemIdentifier("resizeBlurOverlay")
-        container.addSubview(blurOverlay)
-
-        NSLayoutConstraint.activate([
-            blurOverlay.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            blurOverlay.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            blurOverlay.topAnchor.constraint(equalTo: container.topAnchor),
-            blurOverlay.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-
-        // Snapshot image view to freeze content during resize
-        let snapshotView = NSImageView()
-        snapshotView.imageScaling = .scaleProportionallyUpOrDown
-        snapshotView.alphaValue = 0
-        snapshotView.isHidden = true
-        snapshotView.translatesAutoresizingMaskIntoConstraints = false
-        snapshotView.identifier = NSUserInterfaceItemIdentifier("resizeSnapshotView")
-        container.addSubview(snapshotView)
-
-        NSLayoutConstraint.activate([
-            snapshotView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            snapshotView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            snapshotView.topAnchor.constraint(equalTo: container.topAnchor),
-            snapshotView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
         let handle = ResizeHandleView(settings: settings)
@@ -440,79 +408,43 @@ final class ResizeHandleView: NSVisualEffectView {
     }
 
     @objc private func handlePan(_ recognizer: NSPanGestureRecognizer) {
-        guard let window = self.window else { return }
+        guard let window else { return }
 
-        let presets = PopupSizePreset.allCases.map { $0.contentSize }
-        guard presets.count == 4 else { return }
+        let presets = PopupSizePreset.allCases.map(\.contentSize)
+        guard presets.count == 4, let screen = window.screen else { return }
 
         let translation = recognizer.translation(in: self)
-        // Dragging DOWN (positive y) should make popup LARGER, so we negate y
         let scalar = -translation.y
-
-        // Drag farther -> proportionally larger/smaller, smoothly.
         let pointsPerPresetStep: CGFloat = 80
-
-        // Find the overlay views in the content view
-        let blurOverlay = window.contentView?.subviews.first(where: {
-            $0.identifier == NSUserInterfaceItemIdentifier("resizeBlurOverlay")
-        }) as? NSVisualEffectView
-
-        let snapshotView = window.contentView?.subviews.first(where: {
-            $0.identifier == NSUserInterfaceItemIdentifier("resizeSnapshotView")
-        }) as? NSImageView
-
-        // Find the webview to hide during resize
-        let webView = window.contentView?.subviews.first(where: { $0 is WKWebView }) as? WKWebView
 
         switch recognizer.state {
         case .began:
             startContinuousIndex = CGFloat(settings.popupSizePreset.index)
             startWindowFrame = window.frame
 
-            // Take a snapshot of the webview and show it
-            if let webView = webView {
-                let bitmapRep = webView.bitmapImageRepForCachingDisplay(in: webView.bounds)
-                if let bitmapRep = bitmapRep {
-                    webView.cacheDisplay(in: webView.bounds, to: bitmapRep)
-                    let image = NSImage(size: webView.bounds.size)
-                    image.addRepresentation(bitmapRep)
-                    snapshotView?.image = image
-                }
-            }
-
-            // Show snapshot and blur, hide webview for smooth resize
-            snapshotView?.isHidden = false
-            blurOverlay?.isHidden = false
-            snapshotView?.alphaValue = 1
-            blurOverlay?.alphaValue = 0.5
-            webView?.alphaValue = 0
-
         case .changed:
-            guard let startIndex = startContinuousIndex,
-                  let startFrame = startWindowFrame else { return }
+            guard let startIndex = startContinuousIndex else { return }
 
-            let rawIndex = startIndex + (scalar / pointsPerPresetStep)
-            let clamped = max(0, min(CGFloat(presets.count - 1), rawIndex))
-
+            let clamped = max(0, min(CGFloat(presets.count - 1), startIndex + (scalar / pointsPerPresetStep)))
             let lower = Int(floor(clamped))
             let upper = Int(ceil(clamped))
             let t = clamped - CGFloat(lower)
-
             let a = presets[lower]
             let b = presets[upper]
             let interpolated = NSSize(
                 width: a.width + (b.width - a.width) * t,
                 height: a.height + (b.height - a.height) * t
             )
+            let nextFrame = PopoverPresentationPolicy.panelFrame(
+                visibleFrame: screen.visibleFrame,
+                contentSize: interpolated
+            )
 
-            let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: interpolated)).size
-            var nextFrame = startFrame
-            nextFrame.size = targetFrameSize
-            nextFrame.origin.x = startFrame.minX
-            nextFrame.origin.y = startFrame.maxY - targetFrameSize.height
-
-            // Direct frame update for smooth real-time resizing
-            window.setFrame(nextFrame, display: false)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            window.setFrame(nextFrame, display: true)
+            window.contentView?.layoutSubtreeIfNeeded()
+            CATransaction.commit()
 
         case .ended, .cancelled, .failed:
             defer {
@@ -520,97 +452,26 @@ final class ResizeHandleView: NSVisualEffectView {
                 startWindowFrame = nil
             }
 
-            guard let startIndex = startContinuousIndex,
-                  let startFrame = startWindowFrame else { return }
+            guard let startIndex = startContinuousIndex else { return }
 
             let rawIndex = startIndex + (scalar / pointsPerPresetStep)
-            let snapped = Int((max(0, min(CGFloat(presets.count - 1), rawIndex))).rounded())
+            let snapped = Int(max(0, min(CGFloat(presets.count - 1), rawIndex)).rounded())
             let preset = PopupSizePreset.from(index: snapped)
-
-            // Animate to final snapped size
-            let finalSize = preset.contentSize
-            let targetFrameSize = window.frameRect(forContentRect: NSRect(origin: .zero, size: finalSize)).size
-            var finalFrame = startFrame
-            finalFrame.size = targetFrameSize
-            finalFrame.origin.x = startFrame.minX
-            finalFrame.origin.y = startFrame.maxY - targetFrameSize.height
+            let finalFrame = PopoverPresentationPolicy.panelFrame(
+                visibleFrame: screen.visibleFrame,
+                contentSize: preset.contentSize
+            )
 
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.2
+                ctx.duration = 0.16
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                window.animator().setFrame(finalFrame, display: false)
+                window.animator().setFrame(finalFrame, display: true)
             }, completionHandler: {
-                // Restore webview and hide snapshot/blur
-                webView?.alphaValue = 1
-                snapshotView?.alphaValue = 0
-                blurOverlay?.alphaValue = 0
-                snapshotView?.isHidden = true
-                blurOverlay?.isHidden = true
-                snapshotView?.image = nil
-
-                if preset != self.settings.popupSizePreset {
-                    self.settings.popupSizePreset = preset
-                }
+                self.settings.updatePresetFromResizeHandle(preset)
             })
 
         default:
             break
         }
-    }
-}
-
-extension AppDelegate {
-    private func renderStatusBarIconFromSVG(size: CGSize, completion: @escaping (NSImage?) -> Void) {
-        let svgPaths = [
-            "m132.37 210.4 110.82 -81.9c5.43 -4 13.2 -2.44 15.78 3.8 13.63 32.88 7.54 72.41 -19.57 99.55 -27.1 27.14 -64.82 33.1 -99.3 19.54l-37.65 17.45c54.01 36.97 119.6 27.82 160.59 -13.24 32.51 -32.55 42.58 -76.92 33.17 -116.93l0.08 0.09c-13.65 -58.78 3.36 -82.27 38.2 -130.31q1.23 -1.7 2.47 -3.45l-45.85 45.9v-0.14L132.34 210.44",
-            "M109.5 230.31c-38.77 -37.07 -32.08 -94.46 1 -127.55 24.46 -24.49 64.54 -34.48 99.52 -19.79L247.6 65.6c-6.77 -4.9 -15.45 -10.17 -25.4 -13.87A124.65 124.65 0 0 0 86.75 79.01c-35.19 35.23 -46.25 89.4 -27.25 135.61 14.2 34.54 -9.07 58.98 -32.51 83.64 -8.3 8.74 -16.64 17.49 -23.35 26.74l105.83 -94.66"
-        ]
-
-        let svg = """
-        <svg viewBox=\"0 0 800 800\" xmlns=\"http://www.w3.org/2000/svg\" width=\"100%\" height=\"100%\" preserveAspectRatio=\"xMidYMid slice\">
-            <g fill=\"black\">
-                <path d=\"\(svgPaths[0])\" />
-                <path d=\"\(svgPaths[1])\" />
-            </g>
-        </svg>
-        """
-
-        let html = """
-        <html><head><meta name=\"color-scheme\" content=\"light dark\"></head>
-        <body style=\"margin:0;background:transparent;\">\(svg)</body></html>
-        """
-
-    let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-    let pixelSize = CGSize(width: size.width * 2, height: size.height * 2)
-    let webView = WKWebView(frame: CGRect(origin: .zero, size: pixelSize), configuration: config)
-        webView.setValue(false, forKey: "drawsBackground")
-
-        class Loader: NSObject, WKNavigationDelegate {
-            let size: CGSize
-            let pixelSize: CGSize
-            let completion: (NSImage?) -> Void
-            init(size: CGSize, pixelSize: CGSize, completion: @escaping (NSImage?) -> Void) {
-                self.size = size; self.pixelSize = pixelSize; self.completion = completion
-            }
-            func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-                let snap = WKSnapshotConfiguration()
-                snap.rect = CGRect(origin: .zero, size: pixelSize)
-                snap.afterScreenUpdates = true
-                webView.takeSnapshot(with: snap) { image, _ in
-                    if let image = image {
-                        image.size = self.size
-                        self.completion(image)
-                    } else {
-                        self.completion(nil)
-                    }
-                }
-            }
-        }
-
-        let loader = Loader(size: size, pixelSize: pixelSize, completion: completion)
-        webView.navigationDelegate = loader
-        objc_setAssociatedObject(webView, Unmanaged.passUnretained(webView).toOpaque(), loader, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        webView.loadHTMLString(html, baseURL: nil)
     }
 }

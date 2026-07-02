@@ -11,7 +11,12 @@ final class PopoverCloseFlowTests: XCTestCase {
 
     func testCloseFlowBlocksIncidentalSystemDismissButAllowsToggle() {
         let controller = PopoverSessionController(osMajorVersion: 27)
-        controller.prepareForTestingShown()
+        let hostingController = NSViewController()
+        hostingController.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
+        controller.configure(hostingController: hostingController)
+
+        let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!
+        controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
         XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .systemRequest))
         XCTAssertEqual(
@@ -24,18 +29,31 @@ final class PopoverCloseFlowTests: XCTestCase {
         XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .statusItemToggle))
     }
 
-    func testOutsideClickRemainsIntentionalDismiss() {
+    func testOutsideClickDismissesOnlyWhenRetainFocusIsOff() {
         let popoverFrame = NSRect(x: 100, y: 100, width: 300, height: 400)
+        let statusItemFrame = NSRect(x: 900, y: 1100, width: 24, height: 24)
+        let outsidePoint = NSPoint(x: 10, y: 10)
 
         XCTAssertTrue(
             PopoverPresentationPolicy.shouldDismissForMouseEvent(
                 type: .leftMouseDown,
-                screenLocation: NSPoint(x: 10, y: 10),
+                screenLocation: outsidePoint,
                 popoverFrame: popoverFrame,
-                statusItemFrame: NSRect(x: 900, y: 1100, width: 24, height: 24)
+                statusItemFrame: statusItemFrame,
+                retainFocus: false
             )
         )
-        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick))
+        XCTAssertFalse(
+            PopoverPresentationPolicy.shouldDismissForMouseEvent(
+                type: .leftMouseDown,
+                screenLocation: outsidePoint,
+                popoverFrame: popoverFrame,
+                statusItemFrame: statusItemFrame,
+                retainFocus: true
+            )
+        )
+        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick, retainFocus: false))
+        XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick, retainFocus: true))
     }
 
     func testStatusItemClickIsExcludedFromOutsideDismissMonitor() {

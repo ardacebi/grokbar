@@ -8,6 +8,7 @@ enum PopupChromeStyle {
         view.wantsLayer = true
         view.layer?.cornerRadius = cornerRadius
         view.layer?.masksToBounds = true
+        view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         view.layer?.borderWidth = borderWidth
         view.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
     }

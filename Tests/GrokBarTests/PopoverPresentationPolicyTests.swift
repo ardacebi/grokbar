@@ -46,8 +46,32 @@ final class PopoverPresentationPolicyTests: XCTestCase {
 
     func testIntentionalCloseReasonsAreAllowed() {
         XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .statusItemToggle))
-        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick))
+        XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick, retainFocus: false))
         XCTAssertTrue(PopoverPresentationPolicy.shouldClosePopover(for: .escapeKey))
+    }
+
+    func testRetainFocusSuppressesOutsideClickDismiss() {
+        XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .outsideClick, retainFocus: true))
+        XCTAssertFalse(
+            PopoverPresentationPolicy.shouldDismissForMouseEvent(
+                type: .leftMouseDown,
+                screenLocation: NSPoint(x: 10, y: 10),
+                popoverFrame: NSRect(x: 100, y: 100, width: 300, height: 400),
+                statusItemFrame: NSRect(x: 900, y: 1100, width: 24, height: 24),
+                retainFocus: true
+            )
+        )
+    }
+
+    func testPanelFrameAnchorsTopRightOfVisibleScreen() {
+        let visibleFrame = NSRect(x: 0, y: 100, width: 1920, height: 980)
+        let contentSize = NSSize(width: 420, height: 640)
+        let frame = PopoverPresentationPolicy.panelFrame(visibleFrame: visibleFrame, contentSize: contentSize)
+
+        XCTAssertEqual(frame.maxX, visibleFrame.maxX - PopoverPresentationPolicy.screenMargin, accuracy: 0.5)
+        XCTAssertEqual(frame.maxY, visibleFrame.maxY - PopoverPresentationPolicy.screenMargin, accuracy: 0.5)
+        XCTAssertEqual(frame.width, contentSize.width, accuracy: 0.5)
+        XCTAssertEqual(frame.height, contentSize.height, accuracy: 0.5)
     }
 
     func testSystemCloseRequestsAreBlocked() {
@@ -118,7 +142,7 @@ final class PopoverPresentationPolicyTests: XCTestCase {
     func testMacOS27ConsumesSpaceInKeyMonitorAction() {
         XCTAssertEqual(
             PopoverPresentationPolicy.keyMonitorAction(
-                isShown: true,
+                isPopupActive: true,
                 keyCode: PopoverPresentationPolicy.spaceKeyCode,
                 eventType: .keyDown,
                 osMajorVersion: 27
@@ -130,10 +154,22 @@ final class PopoverPresentationPolicyTests: XCTestCase {
     func testMacOS14PassesSpaceThroughInKeyMonitorAction() {
         XCTAssertEqual(
             PopoverPresentationPolicy.keyMonitorAction(
-                isShown: true,
+                isPopupActive: true,
                 keyCode: PopoverPresentationPolicy.spaceKeyCode,
                 eventType: .keyDown,
                 osMajorVersion: 14
+            ),
+            .passThrough
+        )
+    }
+
+    func testInactivePopupIgnoresSpaceMonitorAction() {
+        XCTAssertEqual(
+            PopoverPresentationPolicy.keyMonitorAction(
+                isPopupActive: false,
+                keyCode: PopoverPresentationPolicy.spaceKeyCode,
+                eventType: .keyDown,
+                osMajorVersion: 27
             ),
             .passThrough
         )
