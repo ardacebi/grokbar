@@ -15,34 +15,28 @@ enum PopupPresentationAnimation {
         var frame: NSRect
         var alpha: CGFloat
         var scale: CGFloat
-    }
-
-    static func openingStartFrame(finalFrame: NSRect) -> NSRect {
-        NSRect(
-            x: finalFrame.maxX,
-            y: finalFrame.origin.y,
-            width: finalFrame.width,
-            height: finalFrame.height
-        )
+        var contentOffsetX: CGFloat
     }
 
     static func openingStartState(finalFrame: NSRect) -> PresentationState {
         PresentationState(
-            frame: openingStartFrame(finalFrame: finalFrame),
+            frame: finalFrame,
             alpha: presentationOpacity,
-            scale: presentationScale
+            scale: presentationScale,
+            contentOffsetX: finalFrame.width
         )
     }
 
     static func restingState(for finalFrame: NSRect) -> PresentationState {
-        PresentationState(frame: finalFrame, alpha: 1, scale: 1)
+        PresentationState(frame: finalFrame, alpha: 1, scale: 1, contentOffsetX: 0)
     }
 
     static func closingEndState(from frame: NSRect) -> PresentationState {
         PresentationState(
-            frame: openingStartFrame(finalFrame: frame),
+            frame: frame,
             alpha: presentationOpacity,
-            scale: presentationScale
+            scale: presentationScale,
+            contentOffsetX: frame.width
         )
     }
 
@@ -51,7 +45,8 @@ enum PopupPresentationAnimation {
         return PresentationState(
             frame: panel.frame,
             alpha: CGFloat(panel.alphaValue),
-            scale: scale
+            scale: scale,
+            contentOffsetX: contentOffsetX(in: panel)
         )
     }
 
@@ -63,7 +58,12 @@ enum PopupPresentationAnimation {
         PresentationState(
             frame: SpringTiming.interpolate(from.frame, to.frame, progress: progress),
             alpha: SpringTiming.interpolate(from.alpha, to.alpha, progress: progress),
-            scale: SpringTiming.interpolate(from.scale, to.scale, progress: progress)
+            scale: SpringTiming.interpolate(from.scale, to.scale, progress: progress),
+            contentOffsetX: SpringTiming.interpolate(
+                from.contentOffsetX,
+                to.contentOffsetX,
+                progress: progress
+            )
         )
     }
 
@@ -80,9 +80,11 @@ enum PopupPresentationAnimation {
     ) {
         prepareForPresentation(panel)
 
-        let from = openingStartState(finalFrame: finalFrame)
+        var from = panel.isVisible ? currentState(for: panel) : openingStartState(finalFrame: finalFrame)
+        from.frame = finalFrame
         let to = restingState(for: finalFrame)
 
+        panel.hasShadow = false
         applyPresentationState(from, to: panel)
         panel.orderFront(nil)
         onPresented?()
@@ -93,7 +95,10 @@ enum PopupPresentationAnimation {
             to: to,
             perceptualDuration: openPerceptualDuration,
             bounce: springBounce,
-            completion: completion
+            completion: {
+                panel.hasShadow = true
+                completion()
+            }
         )
     }
 
@@ -102,13 +107,11 @@ enum PopupPresentationAnimation {
         finalFrame: NSRect,
         completion: @escaping () -> Void
     ) {
-        let resting = restingState(for: finalFrame)
         let closing = closingEndState(from: finalFrame)
         let from = dismissStartState(for: panel, finalFrame: finalFrame)
 
-        if from == resting {
-            applyPresentationState(from, to: panel)
-        }
+        panel.hasShadow = false
+        applyPresentationState(from, to: panel)
 
         runSpringPresentation(
             on: panel,
@@ -119,31 +122,16 @@ enum PopupPresentationAnimation {
             completion: {
                 panel.orderOut(nil)
                 resetContentTransform(in: panel)
+                panel.hasShadow = true
                 completion()
             }
         )
     }
 
     static func dismissStartState(for panel: NSWindow, finalFrame: NSRect) -> PresentationState {
-        let resting = restingState(for: finalFrame)
-        let opening = openingStartState(finalFrame: finalFrame)
-        let current = currentState(for: panel)
-
-        let totalTravel = opening.frame.origin.x - resting.frame.origin.x
-        guard totalTravel > 1 else { return resting }
-
-        let traveled = opening.frame.origin.x - current.frame.origin.x
-        let openFraction = min(1, max(0, traveled / totalTravel))
-
-        if openFraction >= 0.55 {
-            return resting
-        }
-
-        return PresentationState(
-            frame: current.frame,
-            alpha: current.alpha,
-            scale: current.scale
-        )
+        var current = currentState(for: panel)
+        current.frame = finalFrame
+        return current
     }
 
     static func cancel(for panel: NSWindow) {
@@ -162,30 +150,52 @@ enum PopupPresentationAnimation {
             panel.setFrame(state.frame, display: true)
             panel.alphaValue = state.alpha
         }
-        applyContentScale(state.scale, to: panel)
+        applyContentTransform(
+            scale: state.scale,
+            horizontalOffset: state.contentOffsetX,
+            to: panel
+        )
     }
 
     private static func contentScale(in panel: NSWindow) -> CGFloat {
-        guard let transform = panel.contentView?.layer?.transform else { return 1 }
+        guard let transform = presentationContentView(in: panel)?.layer?.transform else { return 1 }
         return CGFloat(transform.m11)
     }
 
-    private static func applyContentScale(_ scale: CGFloat, to panel: NSWindow) {
-        guard let contentView = panel.contentView else { return }
+    private static func contentOffsetX(in panel: NSWindow) -> CGFloat {
+        guard let transform = presentationContentView(in: panel)?.layer?.transform else { return 0 }
+        return CGFloat(transform.m41)
+    }
+
+    private static func presentationContentView(in panel: NSWindow) -> NSView? {
+        if let popupPanel = panel as? MenuBarPopupPanel {
+            return popupPanel.presentationContentView
+        }
+        return panel.contentView
+    }
+
+    private static func applyContentTransform(
+        scale: CGFloat,
+        horizontalOffset: CGFloat,
+        to panel: NSWindow
+    ) {
+        guard let contentView = presentationContentView(in: panel) else { return }
         contentView.wantsLayer = true
         guard let layer = contentView.layer else { return }
 
         layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         layer.position = CGPoint(x: contentView.bounds.midX, y: contentView.bounds.midY)
-        if abs(scale - 1) < 0.001 {
+        if abs(scale - 1) < 0.001, abs(horizontalOffset) < 0.001 {
             layer.transform = CATransform3DIdentity
         } else {
-            layer.transform = CATransform3DMakeScale(scale, scale, 1)
+            var transform = CATransform3DMakeScale(scale, scale, 1)
+            transform.m41 = horizontalOffset
+            layer.transform = transform
         }
     }
 
     private static func resetContentTransform(in panel: NSWindow) {
-        guard let layer = panel.contentView?.layer else { return }
+        guard let layer = presentationContentView(in: panel)?.layer else { return }
         layer.transform = CATransform3DIdentity
         layer.opacity = 1
     }

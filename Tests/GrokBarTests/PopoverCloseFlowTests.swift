@@ -9,8 +9,8 @@ final class PopoverCloseFlowTests: XCTestCase {
         )
     }
 
-    func testCloseFlowBlocksIncidentalSystemDismissButAllowsToggle() {
-        let controller = PopoverSessionController(osMajorVersion: 27)
+    func testCloseFlowConsumesSpaceAndAllowsToggle() {
+        let controller = PopoverSessionController()
         let hostingController = NSViewController()
         hostingController.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
         controller.configure(hostingController: hostingController)
@@ -18,11 +18,9 @@ final class PopoverCloseFlowTests: XCTestCase {
         let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!
         controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
-        XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .systemRequest))
         XCTAssertEqual(
             controller.handleLocalKeyDown(
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown
+                keyCode: PopoverPresentationPolicy.spaceKeyCode
             ),
             .consumeAndInsertSpace
         )

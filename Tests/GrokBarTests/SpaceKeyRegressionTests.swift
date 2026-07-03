@@ -3,7 +3,7 @@ import XCTest
 
 final class SpaceKeyRegressionTests: XCTestCase {
     private func configuredController(retainFocus: Bool = false) -> PopoverSessionController {
-        let controller = PopoverSessionController(osMajorVersion: 27)
+        let controller = PopoverSessionController()
         controller.retainFocus = retainFocus
         let hostingController = NSViewController()
         hostingController.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
@@ -13,25 +13,14 @@ final class SpaceKeyRegressionTests: XCTestCase {
 
     func testSpaceInterceptDoesNotDependOnRetainFocus() {
         XCTAssertTrue(
-            PopoverPresentationPolicy.shouldInterceptSpaceKey(
-                isPopupActive: true,
-                osMajorVersion: 27
-            )
+            PopoverPresentationPolicy.shouldInterceptSpaceKey(isPopupActive: true)
         )
         XCTAssertEqual(
             PopoverPresentationPolicy.keyMonitorAction(
                 isPopupActive: true,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown,
-                osMajorVersion: 27
+                keyCode: PopoverPresentationPolicy.spaceKeyCode
             ),
             .consumeAndInsertSpace
-        )
-        XCTAssertFalse(
-            PopoverPresentationPolicy.shouldDismissForKeyEvent(
-                type: .keyDown,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode
-            )
         )
     }
 
@@ -41,8 +30,7 @@ final class SpaceKeyRegressionTests: XCTestCase {
         controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
         let passesThrough = controller.processMonitoredKeyDown(
-            keyCode: PopoverPresentationPolicy.spaceKeyCode,
-            eventType: .keyDown
+            keyCode: PopoverPresentationPolicy.spaceKeyCode
         )
 
         XCTAssertFalse(passesThrough)
@@ -56,8 +44,7 @@ final class SpaceKeyRegressionTests: XCTestCase {
         controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
         _ = controller.processMonitoredKeyDown(
-            keyCode: PopoverPresentationPolicy.escapeKeyCode,
-            eventType: .keyDown
+            keyCode: PopoverPresentationPolicy.escapeKeyCode
         )
 
         XCTAssertEqual(controller.closeInvocationCount, 1)

@@ -1,11 +1,53 @@
 import AppKit
 import WebKit
 
+final class MenuBarPopupContentController: NSViewController {
+    let presentedController: NSViewController
+
+    init(presentedController: NSViewController) {
+        self.presentedController = presentedController
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let clippingView = NSView()
+        clippingView.wantsLayer = true
+        clippingView.layer?.masksToBounds = true
+        view = clippingView
+
+        addChild(presentedController)
+        let presentedView = presentedController.view
+        presentedView.translatesAutoresizingMaskIntoConstraints = false
+        clippingView.addSubview(presentedView)
+
+        NSLayoutConstraint.activate([
+            presentedView.leadingAnchor.constraint(equalTo: clippingView.leadingAnchor),
+            presentedView.trailingAnchor.constraint(equalTo: clippingView.trailingAnchor),
+            presentedView.topAnchor.constraint(equalTo: clippingView.topAnchor),
+            presentedView.bottomAnchor.constraint(equalTo: clippingView.bottomAnchor)
+        ])
+    }
+
+    var presentedView: NSView {
+        _ = view
+        return presentedController.view
+    }
+}
+
 final class MenuBarPopupPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     var spaceKeyHandler: (() -> Bool)?
+    private var popupContentController: MenuBarPopupContentController?
+
+    var presentationContentView: NSView? {
+        popupContentController?.presentedView
+    }
 
     init(contentSize: NSSize) {
         super.init(
@@ -25,9 +67,10 @@ final class MenuBarPopupPanel: NSPanel {
         titlebarAppearsTransparent = true
     }
 
-    func applyContentChrome() {
-        guard let view = contentViewController?.view else { return }
-        PopupChromeStyle.apply(to: view)
+    func setPresentedContentController(_ controller: NSViewController) {
+        let popupContentController = MenuBarPopupContentController(presentedController: controller)
+        self.popupContentController = popupContentController
+        contentViewController = popupContentController
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -54,69 +97,38 @@ final class PopoverSessionController: NSObject {
     private(set) var closeInvocationCount = 0
 
     var isPopupActive: Bool {
-        isShown || isOpening || panel?.isVisible == true || popover?.isShown == true
+        isShown || isOpening || panel?.isVisible == true
     }
 
     var isLocalKeyMonitorActive: Bool {
         localKeyMonitor != nil
     }
 
-    private let osMajorVersion: Int
     private var presentationGeneration = 0
     private var panel: MenuBarPopupPanel?
-    private var popover: NSPopover?
-    private var hostingController: NSViewController?
     private weak var webViewRef: WKWebView?
     private weak var statusItemButton: NSStatusBarButton?
 
     private var localKeyMonitor: Any?
     private var outsideClickMonitor: Any?
-    private var pendingCloseReason: PopoverPresentationPolicy.CloseReason = .systemRequest
-
     var retainFocus: Bool = true
     var onWebViewCreate: ((WKWebView) -> Void)?
     var onPopupActiveChanged: ((Bool) -> Void)?
 
     var presentationWindow: NSWindow? {
-        if PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: osMajorVersion) {
-            return panel
-        }
-        return popover?.contentViewController?.view.window
-    }
-
-    init(osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion) {
-        self.osMajorVersion = osMajorVersion
-        super.init()
+        panel
     }
 
     func configure(hostingController: NSViewController) {
-        self.hostingController = hostingController
-
-        if PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: osMajorVersion) {
-            let popupPanel = MenuBarPopupPanel(contentSize: hostingController.view.frame.size)
-            popupPanel.contentViewController = hostingController
-            popupPanel.spaceKeyHandler = { [weak self] in
-                self?.handleSpaceKeyEvent() ?? false
-            }
-            panel = popupPanel
-        } else {
-            let legacyPopover = NSPopover()
-            legacyPopover.delegate = self
-            legacyPopover.animates = true
-            legacyPopover.contentViewController = hostingController
-            popover = legacyPopover
+        let popupPanel = MenuBarPopupPanel(contentSize: hostingController.view.frame.size)
+        popupPanel.setPresentedContentController(hostingController)
+        popupPanel.spaceKeyHandler = { [weak self] in
+            self?.handleSpaceKeyEvent() ?? false
         }
-    }
-
-    func applyBehavior() {
-        popover?.behavior = PopoverPresentationPolicy.popoverBehavior(
-            retainFocus: retainFocus,
-            osMajorVersion: osMajorVersion
-        )
+        panel = popupPanel
     }
 
     func setContentSize(_ size: NSSize) {
-        popover?.contentSize = size
         if let panel, isPopupActive {
             panel.setFrame(anchoredFrame(contentSize: size, screen: panel.screen), display: true)
         }
@@ -124,58 +136,41 @@ final class PopoverSessionController: NSObject {
 
     func show(relativeTo button: NSStatusBarButton, contentSize: NSSize) {
         statusItemButton = button
-        pendingCloseReason = .systemRequest
-        applyBehavior()
+        guard let panel else { return }
+        let finalFrame = anchoredFrame(for: button, contentSize: contentSize)
 
-        if let panel {
-            panel.contentViewController = hostingController
-            let finalFrame = anchoredFrame(for: button, contentSize: contentSize)
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        isOpening = true
+        isAnimating = true
+        isShown = false
+        startMonitors()
 
-            presentationGeneration += 1
-            let generation = presentationGeneration
-            isOpening = true
-            isAnimating = true
-            isShown = false
-            startMonitors()
-
-            if panel.isVisible {
-                notifyPopupActiveChanged(true)
-            }
-
-            PopupPresentationAnimation.present(
-                panel,
-                finalFrame: finalFrame,
-                onPresented: { [weak self] in
-                    self?.establishTypingFocus()
-                },
-                completion: { [weak self] in
-                    guard let self, generation == self.presentationGeneration else { return }
-                    self.isAnimating = false
-                    self.isOpening = false
-                    self.isShown = true
-                    self.notifyPopupActiveChanged(true)
-                    self.establishTypingFocus()
-                }
-            )
-            return
+        if panel.isVisible {
+            notifyPopupActiveChanged(true)
         }
 
-        guard let popover else { return }
-        popover.contentSize = contentSize
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        isShown = popover.isShown
-        notifyPopupActiveChanged(true)
-        startMonitors()
-        establishTypingFocus()
+        PopupPresentationAnimation.present(
+            panel,
+            finalFrame: finalFrame,
+            onPresented: { [weak self] in
+                self?.establishTypingFocus()
+            },
+            completion: { [weak self] in
+                guard let self, generation == self.presentationGeneration else { return }
+                self.isAnimating = false
+                self.isOpening = false
+                self.isShown = true
+                self.notifyPopupActiveChanged(true)
+                self.establishTypingFocus()
+            }
+        )
     }
 
     func close(reason: PopoverPresentationPolicy.CloseReason) {
         guard isPopupActive else { return }
 
-        pendingCloseReason = reason
-
         guard PopoverPresentationPolicy.shouldClosePopover(for: reason, retainFocus: retainFocus) else {
-            pendingCloseReason = .systemRequest
             return
         }
 
@@ -184,31 +179,17 @@ final class PopoverSessionController: NSObject {
         let generation = presentationGeneration
         notifyPopupActiveChanged(false)
 
-        if let panel {
-            isAnimating = true
-            isOpening = false
-            isShown = false
-            let finalFrame = restingFrame(for: panel)
-            PopupPresentationAnimation.dismiss(panel, finalFrame: finalFrame) { [weak self] in
-                guard let self, generation == self.presentationGeneration else { return }
-                self.stopMonitors()
-                self.isAnimating = false
-                self.isShown = false
-                self.pendingCloseReason = .systemRequest
-            }
-            return
-        } else if let popover {
-            stopMonitors()
-            popover.performClose(nil)
-            if popover.isShown {
-                popover.close()
-            }
-        }
-
-        stopMonitors()
+        guard let panel else { return }
+        isAnimating = true
+        isOpening = false
         isShown = false
-        pendingCloseReason = .systemRequest
-        notifyPopupActiveChanged(false)
+        let finalFrame = restingFrame(for: panel)
+        PopupPresentationAnimation.dismiss(panel, finalFrame: finalFrame) { [weak self] in
+            guard let self, generation == self.presentationGeneration else { return }
+            self.stopMonitors()
+            self.isAnimating = false
+            self.isShown = false
+        }
     }
 
     func toggle(relativeTo button: NSStatusBarButton, contentSize: NSSize) {
@@ -238,23 +219,20 @@ final class PopoverSessionController: NSObject {
     func establishTypingFocus() {
         PopupFocusEstablishment.establish(
             window: presentationWindow,
-            webView: webViewRef,
-            osMajorVersion: osMajorVersion
+            webView: webViewRef
         )
     }
 
-    func handleLocalKeyDown(keyCode: UInt16, eventType: NSEvent.EventType) -> PopoverPresentationPolicy.KeyMonitorAction {
+    func handleLocalKeyDown(keyCode: UInt16) -> PopoverPresentationPolicy.KeyMonitorAction {
         PopoverPresentationPolicy.keyMonitorAction(
             isPopupActive: isPopupActive,
-            keyCode: keyCode,
-            eventType: eventType,
-            osMajorVersion: osMajorVersion
+            keyCode: keyCode
         )
     }
 
     @discardableResult
-    func processMonitoredKeyDown(keyCode: UInt16, eventType: NSEvent.EventType) -> Bool {
-        switch handleLocalKeyDown(keyCode: keyCode, eventType: eventType) {
+    func processMonitoredKeyDown(keyCode: UInt16) -> Bool {
+        switch handleLocalKeyDown(keyCode: keyCode) {
         case .passThrough:
             establishTypingFocus()
             return true
@@ -269,10 +247,7 @@ final class PopoverSessionController: NSObject {
 
     @discardableResult
     func handleSpaceKeyEvent() -> Bool {
-        guard PopoverPresentationPolicy.shouldInterceptSpaceKey(
-            isPopupActive: isPopupActive,
-            osMajorVersion: osMajorVersion
-        ) else {
+        guard PopoverPresentationPolicy.shouldInterceptSpaceKey(isPopupActive: isPopupActive) else {
             return false
         }
 
@@ -314,7 +289,7 @@ final class PopoverSessionController: NSObject {
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            return self.processMonitoredKeyDown(keyCode: event.keyCode, eventType: event.type) ? event : nil
+            return self.processMonitoredKeyDown(keyCode: event.keyCode) ? event : nil
         }
 
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
@@ -346,23 +321,5 @@ final class PopoverSessionController: NSObject {
             NSEvent.removeMonitor(outsideClickMonitor)
             self.outsideClickMonitor = nil
         }
-    }
-}
-
-extension PopoverSessionController: NSPopoverDelegate {
-    func popoverShouldClose(_ popover: NSPopover) -> Bool {
-        PopoverPresentationPolicy.shouldClosePopover(for: pendingCloseReason, retainFocus: retainFocus)
-    }
-
-    func popoverDidShow(_ notification: Notification) {
-        isShown = true
-        notifyPopupActiveChanged(true)
-        establishTypingFocus()
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        isShown = false
-        notifyPopupActiveChanged(false)
-        stopMonitors()
     }
 }

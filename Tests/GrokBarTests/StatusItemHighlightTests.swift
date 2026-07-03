@@ -18,7 +18,7 @@ final class StatusItemHighlightTests: XCTestCase {
     }
 
     func testCloseNotifiesPopupInactive() {
-        let controller = PopoverSessionController(osMajorVersion: 27)
+        let controller = PopoverSessionController()
         var activeStates: [Bool] = []
         controller.onPopupActiveChanged = { activeStates.append($0) }
 
@@ -30,13 +30,27 @@ final class StatusItemHighlightTests: XCTestCase {
         controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
         let expectation = self.expectation(description: "close notifies inactive")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            XCTAssertTrue(controller.isShown, "Popup should finish opening before close")
-            controller.close(reason: .statusItemToggle)
-            XCTAssertTrue(activeStates.contains(true))
-            XCTAssertEqual(activeStates.last, false)
-            expectation.fulfill()
+        func closeWhenShown(attemptsRemaining: Int) {
+            if controller.isShown {
+                controller.close(reason: .statusItemToggle)
+                XCTAssertTrue(activeStates.contains(true))
+                XCTAssertEqual(activeStates.last, false)
+                expectation.fulfill()
+                return
+            }
+
+            guard attemptsRemaining > 0 else {
+                XCTFail("Popup did not finish opening")
+                expectation.fulfill()
+                return
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                closeWhenShown(attemptsRemaining: attemptsRemaining - 1)
+            }
         }
+
+        closeWhenShown(attemptsRemaining: 40)
         wait(for: [expectation], timeout: 3.0)
     }
 }

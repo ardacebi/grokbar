@@ -1,6 +1,5 @@
 import XCTest
 @testable import GrokBar
-import QuartzCore
 
 final class PopupPresentationAnimationTests: XCTestCase {
     private func makePanel() -> NSWindow {
@@ -14,13 +13,12 @@ final class PopupPresentationAnimationTests: XCTestCase {
         return panel
     }
 
-    func testOpeningStartFrameSlidesInFromRight() {
+    func testOpeningKeepsPanelFixedAndOffsetsContentFromRight() {
         let finalFrame = NSRect(x: 100, y: 200, width: 420, height: 640)
-        let startFrame = PopupPresentationAnimation.openingStartFrame(finalFrame: finalFrame)
+        let start = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
 
-        XCTAssertEqual(startFrame.origin.x, finalFrame.maxX, accuracy: 0.5)
-        XCTAssertEqual(startFrame.origin.y, finalFrame.origin.y, accuracy: 0.5)
-        XCTAssertEqual(startFrame.size, finalFrame.size)
+        XCTAssertEqual(start.frame, finalFrame)
+        XCTAssertEqual(start.contentOffsetX, finalFrame.width, accuracy: 0.001)
     }
 
     func testClosingEndStateMirrorsOpeningStartState() {
@@ -54,26 +52,27 @@ final class PopupPresentationAnimationTests: XCTestCase {
             perceptualDuration: PopupPresentationAnimation.openPerceptualDuration,
             bounce: 0
         )
-        XCTAssertTrue(spring is CASpringAnimation)
+        XCTAssertEqual(spring.keyPath, "opacity")
         XCTAssertGreaterThan(SpringTiming.settlingDuration(
             perceptualDuration: PopupPresentationAnimation.openPerceptualDuration,
             bounce: 0
         ), 0.2)
     }
 
-    func testInterpolatedStateMovesWindowFrameBetweenStartAndEnd() {
+    func testInterpolatedStateMovesContentWithinFixedWindowFrame() {
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
         let from = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
         let to = PopupPresentationAnimation.restingState(for: finalFrame)
         let mid = PopupPresentationAnimation.interpolatedState(from: from, to: to, progress: 0.5)
 
-        XCTAssertGreaterThan(mid.frame.origin.x, to.frame.origin.x)
-        XCTAssertLessThan(mid.frame.origin.x, from.frame.origin.x)
+        XCTAssertEqual(mid.frame, finalFrame)
+        XCTAssertGreaterThan(mid.contentOffsetX, to.contentOffsetX)
+        XCTAssertLessThan(mid.contentOffsetX, from.contentOffsetX)
         XCTAssertGreaterThan(mid.alpha, from.alpha)
         XCTAssertLessThan(mid.alpha, to.alpha + 0.01)
     }
 
-    func testPresentStartsAtOffScreenRightFrame() {
+    func testPresentStartsWithContentOffsetInsideFinalFrame() {
         let panel = makePanel()
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
         let expectedStart = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
@@ -83,7 +82,12 @@ final class PopupPresentationAnimationTests: XCTestCase {
             expectation.fulfill()
         })
 
-        XCTAssertEqual(panel.frame.origin.x, expectedStart.frame.origin.x, accuracy: 0.5)
+        XCTAssertEqual(panel.frame.origin.x, finalFrame.origin.x, accuracy: 1.0)
+        XCTAssertEqual(
+            panel.contentView?.layer?.transform.m41 ?? 0,
+            expectedStart.contentOffsetX,
+            accuracy: 2.0
+        )
         XCTAssertEqual(panel.alphaValue, expectedStart.alpha, accuracy: 0.01)
 
         wait(for: [expectation], timeout: 2.0)
@@ -91,7 +95,7 @@ final class PopupPresentationAnimationTests: XCTestCase {
         XCTAssertEqual(panel.alphaValue, 1, accuracy: 0.01)
     }
 
-    func testPresentAnimatesWindowFrameDuringSpring() {
+    func testPresentAnimatesContentOffsetWhileWindowStaysFixed() {
         let panel = makePanel()
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
         let start = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
@@ -104,38 +108,33 @@ final class PopupPresentationAnimationTests: XCTestCase {
         })
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            let frame = panel.frame
-            XCTAssertGreaterThan(frame.origin.x, finalFrame.origin.x)
-            XCTAssertLessThan(frame.origin.x, start.frame.origin.x + 1)
+            let offset = panel.contentView?.layer?.transform.m41 ?? 0
+            XCTAssertEqual(panel.frame, finalFrame)
+            XCTAssertGreaterThan(offset, 0)
+            XCTAssertLessThan(offset, start.contentOffsetX)
             midExpectation.fulfill()
         }
 
         wait(for: [midExpectation, doneExpectation], timeout: 2.0)
     }
 
-    func testPresentAnimatesScaleDuringSpring() {
+    func testPresentationStartsScaledAndFinishesAtIdentity() {
         let panel = makePanel()
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
 
-        let midExpectation = expectation(description: "mid scale")
         let doneExpectation = expectation(description: "present completes")
 
         PopupPresentationAnimation.present(panel, finalFrame: finalFrame, completion: {
             doneExpectation.fulfill()
         })
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            let scale = panel.contentView?.layer?.transform.m11 ?? 1
-            let inMotion = scale > PopupPresentationAnimation.presentationScale + 0.001
-                && scale < 0.999
-            XCTAssertTrue(
-                inMotion,
-                "Expected scale between \(PopupPresentationAnimation.presentationScale) and 1, got \(scale)"
-            )
-            midExpectation.fulfill()
-        }
+        XCTAssertEqual(
+            panel.contentView?.layer?.transform.m11 ?? 1,
+            PopupPresentationAnimation.presentationScale,
+            accuracy: 0.005
+        )
 
-        wait(for: [midExpectation, doneExpectation], timeout: 2.0)
+        wait(for: [doneExpectation], timeout: 2.0)
         XCTAssertEqual(panel.contentView?.layer?.transform.m11 ?? 1, 1, accuracy: 0.001)
     }
 
@@ -185,10 +184,9 @@ final class PopupPresentationAnimationTests: XCTestCase {
         XCTAssertEqual(panel.alphaValue, 1, accuracy: 0.01)
     }
 
-    func testPresentInterruptedDuringCloseUsesCanonicalOpeningStart() {
+    func testPresentInterruptedDuringCloseContinuesFromCurrentOffset() {
         let panel = makePanel()
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
-        let expectedStart = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
 
         panel.setFrame(finalFrame, display: true)
         panel.alphaValue = 1
@@ -199,12 +197,16 @@ final class PopupPresentationAnimationTests: XCTestCase {
         PopupPresentationAnimation.dismiss(panel, finalFrame: finalFrame, completion: {})
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            let offsetBeforeReopen = panel.contentView?.layer?.transform.m41 ?? 0
             PopupPresentationAnimation.present(panel, finalFrame: finalFrame, completion: {
                 interruptedExpectation.fulfill()
             })
 
-            XCTAssertEqual(panel.frame.origin.x, expectedStart.frame.origin.x, accuracy: 0.5)
-            XCTAssertEqual(panel.alphaValue, expectedStart.alpha, accuracy: 0.01)
+            let offsetAfterReopen = panel.contentView?.layer?.transform.m41 ?? 0
+            XCTAssertEqual(panel.frame, finalFrame)
+            XCTAssertGreaterThan(offsetBeforeReopen, 0)
+            XCTAssertLessThan(offsetBeforeReopen, finalFrame.width)
+            XCTAssertEqual(offsetAfterReopen, offsetBeforeReopen, accuracy: 2.0)
         }
 
         wait(for: [interruptedExpectation], timeout: 2.0)
@@ -223,6 +225,33 @@ final class PopupPresentationAnimationTests: XCTestCase {
         XCTAssertEqual(start.frame, finalFrame)
         XCTAssertEqual(start.alpha, 1, accuracy: 0.01)
         XCTAssertEqual(start.scale, 1, accuracy: 0.01)
+        XCTAssertEqual(start.contentOffsetX, 0, accuracy: 0.01)
+    }
+
+    func testPopupClipsSlidingContentToTargetScreen() {
+        let targetScreenFrame = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let adjacentScreenFrame = NSRect(x: 1920, y: 0, width: 1920, height: 1080)
+        let finalFrame = PopoverPresentationPolicy.panelFrame(
+            visibleFrame: targetScreenFrame,
+            contentSize: NSSize(width: 420, height: 640)
+        )
+        let contentController = NSViewController()
+        contentController.view = NSView(frame: NSRect(origin: .zero, size: finalFrame.size))
+        let panel = MenuBarPopupPanel(contentSize: finalFrame.size)
+        panel.setPresentedContentController(contentController)
+
+        let completion = expectation(description: "presentation completes")
+        PopupPresentationAnimation.present(panel, finalFrame: finalFrame) {
+            completion.fulfill()
+        }
+
+        XCTAssertEqual(panel.frame, finalFrame)
+        XCTAssertFalse(panel.frame.intersects(adjacentScreenFrame))
+        XCTAssertEqual(panel.contentView?.layer?.masksToBounds, true)
+        XCTAssertFalse(panel.hasShadow)
+
+        wait(for: [completion], timeout: 2.0)
+        XCTAssertTrue(panel.hasShadow)
     }
 
     func testPresentCallsOnPresentedBeforeCompletion() {

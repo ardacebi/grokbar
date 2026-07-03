@@ -2,46 +2,21 @@ import XCTest
 @testable import GrokBar
 
 final class PopoverPresentationPolicyTests: XCTestCase {
-    func testSpaceKeyIsTypingKeyAndDoesNotDismiss() {
-        XCTAssertTrue(PopoverPresentationPolicy.isTypingKeyCode(PopoverPresentationPolicy.spaceKeyCode))
-        XCTAssertFalse(
-            PopoverPresentationPolicy.shouldDismissForKeyEvent(
-                type: .keyDown,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode
-            )
-        )
-    }
-
-    func testLetterAndNumberKeysDoNotDismiss() {
-        let typingKeyCodes: [UInt16] = [0, 8, 14, 18, 29, 35, 46, 48, 52]
-        for keyCode in typingKeyCodes {
-            XCTAssertTrue(
-                PopoverPresentationPolicy.isTypingKeyCode(keyCode),
-                "Expected keyCode \(keyCode) to be treated as typing input"
-            )
-            XCTAssertFalse(
-                PopoverPresentationPolicy.shouldDismissForKeyEvent(type: .keyDown, keyCode: keyCode),
-                "Expected keyCode \(keyCode) not to dismiss the popup"
-            )
-        }
-    }
-
-    func testEscapeDismissesButIsNotTyping() {
-        XCTAssertFalse(PopoverPresentationPolicy.isTypingKeyCode(PopoverPresentationPolicy.escapeKeyCode))
-        XCTAssertTrue(
-            PopoverPresentationPolicy.shouldDismissForKeyEvent(
-                type: .keyDown,
-                keyCode: PopoverPresentationPolicy.escapeKeyCode
-            )
-        )
+    func testEscapeClosesPopup() {
         XCTAssertEqual(
             PopoverPresentationPolicy.closeReason(forKeyCode: PopoverPresentationPolicy.escapeKeyCode),
             .escapeKey
         )
     }
 
-    func testNonTypingKeysMayDismiss() {
-        XCTAssertTrue(PopoverPresentationPolicy.shouldDismissForKeyEvent(type: .keyDown, keyCode: 55))
+    func testOtherKeysPassThrough() {
+        let keyCodes: [UInt16] = [0, 8, 14, 18, 29, 35, 46, 48, 52, 55, 123]
+        for keyCode in keyCodes {
+            XCTAssertEqual(
+                PopoverPresentationPolicy.keyMonitorAction(isPopupActive: true, keyCode: keyCode),
+                .passThrough
+            )
+        }
     }
 
     func testIntentionalCloseReasonsAreAllowed() {
@@ -72,10 +47,6 @@ final class PopoverPresentationPolicyTests: XCTestCase {
         XCTAssertEqual(frame.maxY, visibleFrame.maxY - PopoverPresentationPolicy.screenMargin, accuracy: 0.5)
         XCTAssertEqual(frame.width, contentSize.width, accuracy: 0.5)
         XCTAssertEqual(frame.height, contentSize.height, accuracy: 0.5)
-    }
-
-    func testSystemCloseRequestsAreBlocked() {
-        XCTAssertFalse(PopoverPresentationPolicy.shouldClosePopover(for: .systemRequest))
     }
 
     func testMouseDownOutsideDismissesButInsideDoesNot() {
@@ -121,45 +92,13 @@ final class PopoverPresentationPolicyTests: XCTestCase {
         )
     }
 
-    func testRetainFocusSelectsApplicationDefinedBehavior() {
-        XCTAssertEqual(
-            PopoverPresentationPolicy.popoverBehavior(retainFocus: true),
-            .applicationDefined
-        )
-    }
-
-    func testMacOS27ForcesApplicationDefinedBehaviorEvenWithoutRetainFocus() {
-        XCTAssertEqual(
-            PopoverPresentationPolicy.popoverBehavior(retainFocus: false, osMajorVersion: 14),
-            .transient
-        )
-        XCTAssertEqual(
-            PopoverPresentationPolicy.popoverBehavior(retainFocus: false, osMajorVersion: 27),
-            .applicationDefined
-        )
-    }
-
-    func testMacOS27ConsumesSpaceInKeyMonitorAction() {
+    func testActivePopupConsumesSpaceInKeyMonitorAction() {
         XCTAssertEqual(
             PopoverPresentationPolicy.keyMonitorAction(
                 isPopupActive: true,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown,
-                osMajorVersion: 27
+                keyCode: PopoverPresentationPolicy.spaceKeyCode
             ),
             .consumeAndInsertSpace
-        )
-    }
-
-    func testMacOS14PassesSpaceThroughInKeyMonitorAction() {
-        XCTAssertEqual(
-            PopoverPresentationPolicy.keyMonitorAction(
-                isPopupActive: true,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown,
-                osMajorVersion: 14
-            ),
-            .passThrough
         )
     }
 
@@ -167,16 +106,9 @@ final class PopoverPresentationPolicyTests: XCTestCase {
         XCTAssertEqual(
             PopoverPresentationPolicy.keyMonitorAction(
                 isPopupActive: false,
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown,
-                osMajorVersion: 27
+                keyCode: PopoverPresentationPolicy.spaceKeyCode
             ),
             .passThrough
         )
-    }
-
-    func testShouldUseAnchoredPanelOnlyOnMacOS27() {
-        XCTAssertFalse(PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: 14))
-        XCTAssertTrue(PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: 27))
     }
 }

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>$(EXECUTABLE_NAME)</string>
+	<string>GrokBar</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.arda.GrokBar</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -19,11 +19,15 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleIconFile</key>
-	<string>Icon_GrokBar.icns</string>
+	<string>Icon_GrokBar</string>
+	<key>CFBundleIconName</key>
+	<string>Icon_GrokBar</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

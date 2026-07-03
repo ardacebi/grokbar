@@ -2,8 +2,8 @@ import XCTest
 @testable import GrokBar
 
 final class PopoverSessionControllerTests: XCTestCase {
-    private func configuredController(osMajorVersion: Int = 27) -> PopoverSessionController {
-        let controller = PopoverSessionController(osMajorVersion: osMajorVersion)
+    private func configuredController() -> PopoverSessionController {
+        let controller = PopoverSessionController()
         let hostingController = NSViewController()
         hostingController.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
         controller.configure(hostingController: hostingController)
@@ -20,19 +20,13 @@ final class PopoverSessionControllerTests: XCTestCase {
         XCTAssertTrue(controller.isOpening)
         XCTAssertEqual(
             controller.handleLocalKeyDown(
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown
+                keyCode: PopoverPresentationPolicy.spaceKeyCode
             ),
             .consumeAndInsertSpace
         )
 
-        let openExpectation = expectation(description: "open animation")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            XCTAssertTrue(controller.isShown)
-            XCTAssertFalse(controller.isOpening)
-            openExpectation.fulfill()
-        }
-        wait(for: [openExpectation], timeout: 2.0)
+        waitUntil("open animation") { controller.isShown }
+        XCTAssertFalse(controller.isOpening)
     }
 
     func testToggleInterruptsAnimationToClose() {
@@ -45,12 +39,7 @@ final class PopoverSessionControllerTests: XCTestCase {
 
         controller.toggle(relativeTo: button, contentSize: contentSize)
 
-        let closeExpectation = expectation(description: "toggle closes during animation")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            XCTAssertFalse(controller.isPopupActive)
-            closeExpectation.fulfill()
-        }
-        wait(for: [closeExpectation], timeout: 2.0)
+        waitUntil("toggle closes during animation") { !controller.isPopupActive }
     }
 
     func testRapidToggleReopensDuringCloseAnimation() {
@@ -72,12 +61,26 @@ final class PopoverSessionControllerTests: XCTestCase {
         wait(for: [openedExpectation], timeout: 2.0)
 
         let shownExpectation = expectation(description: "shown after reverse")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            XCTAssertTrue(controller.isShown)
-            XCTAssertTrue(controller.isPopupActive)
-            shownExpectation.fulfill()
+        func waitUntilShown(attemptsRemaining: Int) {
+            if controller.isShown {
+                shownExpectation.fulfill()
+                return
+            }
+
+            guard attemptsRemaining > 0 else {
+                XCTFail("Popup did not finish reopening")
+                shownExpectation.fulfill()
+                return
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                waitUntilShown(attemptsRemaining: attemptsRemaining - 1)
+            }
         }
-        wait(for: [shownExpectation], timeout: 2.0)
+
+        waitUntilShown(attemptsRemaining: 40)
+        wait(for: [shownExpectation], timeout: 3.0)
+        XCTAssertTrue(controller.isPopupActive)
     }
 
     func testRetainFocusPreventsOutsideClickClose() {
@@ -87,13 +90,8 @@ final class PopoverSessionControllerTests: XCTestCase {
 
         controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
 
-        let openExpectation = expectation(description: "opened")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            controller.close(reason: .outsideClick)
-            XCTAssertTrue(controller.isPopupActive)
-            openExpectation.fulfill()
-        }
-        wait(for: [openExpectation], timeout: 2.0)
+        controller.close(reason: .outsideClick)
+        XCTAssertTrue(controller.isPopupActive)
     }
 
     func testAnchoredFrameUsesTopRightVisibleScreen() {
@@ -109,20 +107,6 @@ final class PopoverSessionControllerTests: XCTestCase {
         XCTAssertEqual(controller.anchoredFrame(for: button, contentSize: contentSize), expected)
     }
 
-    func testHandleLocalKeyDownPassesSpaceThroughOnMacOS14() {
-        let controller = configuredController(osMajorVersion: 14)
-        let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!
-        controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
-
-        XCTAssertEqual(
-            controller.handleLocalKeyDown(
-                keyCode: PopoverPresentationPolicy.spaceKeyCode,
-                eventType: .keyDown
-            ),
-            .passThrough
-        )
-    }
-
     func testHandleLocalKeyDownClosesOnEscapeWhenActive() {
         let controller = configuredController()
         let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!
@@ -130,8 +114,7 @@ final class PopoverSessionControllerTests: XCTestCase {
 
         XCTAssertEqual(
             controller.handleLocalKeyDown(
-                keyCode: PopoverPresentationPolicy.escapeKeyCode,
-                eventType: .keyDown
+                keyCode: PopoverPresentationPolicy.escapeKeyCode
             ),
             .close(.escapeKey)
         )
@@ -144,22 +127,15 @@ final class PopoverSessionControllerTests: XCTestCase {
 
         controller.show(relativeTo: button, contentSize: contentSize)
 
-        let closeExpectation = expectation(description: "closed")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            controller.toggle(relativeTo: button, contentSize: contentSize)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                XCTAssertFalse(controller.isPopupActive)
-                closeExpectation.fulfill()
-            }
-        }
-        wait(for: [closeExpectation], timeout: 2.0)
+        waitUntil("opened before toggle close") { controller.isShown }
+        controller.toggle(relativeTo: button, contentSize: contentSize)
+        waitUntil("closed after toggle") { !controller.isPopupActive }
     }
 
-    func testMacOS27UsesAnchoredPanelPresentation() {
+    func testUsesAnchoredPanelPresentation() {
         let controller = configuredController()
 
-        XCTAssertTrue(PopoverPresentationPolicy.shouldUseAnchoredPanel(osMajorVersion: 27))
-        XCTAssertTrue(controller.presentationWindow is MenuBarPopupPanel || controller.presentationWindow == nil)
+        XCTAssertTrue(controller.presentationWindow is MenuBarPopupPanel)
     }
 
     func testSpaceInsertionScriptIncludesGrokPromptFallbackSelectors() {

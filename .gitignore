@@ -15,17 +15,30 @@ build/
 *.xccheckout
 *.xcscmblueprint
 *.xcresult/
+*.moved-aside
+*.hmap
 
 # Swift Package Manager
 .build/
-.swiftpm/xcode/package.xcworkspace/xcuserdata/
-.swiftpm/xcode/xcuserdata/
+.swiftpm/
+Package.resolved
 
-# Debug symbols
+# Debug symbols / profiling
 *.dSYM/
+*.profraw
+*.profdata
+
+# Generated icon artifacts
+Icon_GrokBar.icns
+Icon_GrokBar.icon/Assets/Icon_GrokBar.iconset/
+Icon_GrokBar.icon/Assets/icon-824.png
+Icon_GrokBar.icon/Assets/grok-mark-layer.png
+Icon_GrokBar.icon/Assets/icon-1024.png
+dist/icon-assets/
 
 # App bundles / archives (generated)
 *.app/
+dist/
 *.dmg
 *.pkg
 *.zip
@@ -33,3 +46,5 @@ build/
 # Optional IDE/editor
 .vscode/
 .idea/
+*~
+*.swp

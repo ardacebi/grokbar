@@ -1,37 +1,26 @@
 {
   "fill" : {
-    "automatic-gradient" : "display-p3:1.00000,1.00000,1.00000,1.00000"
+    "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "fill" : "automatic",
-          "image-name" : "svgviewer-output.svg",
-          "name" : "svgviewer-output",
-          "position" : {
-            "scale" : 25,
-            "translation-in-points" : [
-              665,
-              -5
-            ]
-          }
+          "image-name" : "grok-mark-layer.png",
+          "name" : "grok-mark"
         }
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0
       },
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
     "squares" : "shared"
   }
 }

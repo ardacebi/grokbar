@@ -8,7 +8,6 @@ enum PopoverPresentationPolicy {
         case statusItemToggle
         case outsideClick
         case escapeKey
-        case systemRequest
     }
 
     enum KeyMonitorAction: Equatable {
@@ -17,42 +16,12 @@ enum PopoverPresentationPolicy {
         case close(CloseReason)
     }
 
-    static func isMacOS27OrLater(
-        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    ) -> Bool {
-        osMajorVersion >= 27
-    }
-
-    static func popoverBehavior(
-        retainFocus: Bool,
-        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    ) -> NSPopover.Behavior {
-        if isMacOS27OrLater(osMajorVersion: osMajorVersion) || retainFocus {
-            return .applicationDefined
-        }
-        return .transient
-    }
-
-    static func shouldActivateApplicationOnShow(
-        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    ) -> Bool {
-        isMacOS27OrLater(osMajorVersion: osMajorVersion)
-    }
-
-    static func shouldUseAnchoredPanel(
-        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    ) -> Bool {
-        isMacOS27OrLater(osMajorVersion: osMajorVersion)
-    }
-
     static func shouldClosePopover(for reason: CloseReason, retainFocus: Bool = false) -> Bool {
         switch reason {
         case .statusItemToggle, .escapeKey:
             return true
         case .outsideClick:
             return !retainFocus
-        case .systemRequest:
-            return false
         }
     }
 
@@ -60,25 +29,17 @@ enum PopoverPresentationPolicy {
         keyCode == escapeKeyCode ? .escapeKey : nil
     }
 
-    static func shouldInterceptSpaceKey(
-        isPopupActive: Bool,
-        osMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-    ) -> Bool {
-        isPopupActive && isMacOS27OrLater(osMajorVersion: osMajorVersion)
+    static func shouldInterceptSpaceKey(isPopupActive: Bool) -> Bool {
+        isPopupActive
     }
 
     static func keyMonitorAction(
         isPopupActive: Bool,
-        keyCode: UInt16,
-        eventType: NSEvent.EventType,
-        osMajorVersion: Int
+        keyCode: UInt16
     ) -> KeyMonitorAction {
         guard isPopupActive else { return .passThrough }
 
-        if keyCode == spaceKeyCode && shouldInterceptSpaceKey(
-            isPopupActive: true,
-            osMajorVersion: osMajorVersion
-        ) {
+        if keyCode == spaceKeyCode && shouldInterceptSpaceKey(isPopupActive: true) {
             return .consumeAndInsertSpace
         }
 
@@ -86,30 +47,7 @@ enum PopoverPresentationPolicy {
             return .close(closeReason)
         }
 
-        if isTypingKeyCode(keyCode) {
-            return .passThrough
-        }
-
         return .passThrough
-    }
-
-    static func shouldDismissForKeyEvent(type: NSEvent.EventType, keyCode: UInt16) -> Bool {
-        guard type == .keyDown || type == .keyUp else { return false }
-        if closeReason(forKeyCode: keyCode) != nil { return true }
-        return !isTypingKeyCode(keyCode)
-    }
-
-    static func isTypingKeyCode(_ keyCode: UInt16) -> Bool {
-        if keyCode == escapeKeyCode { return false }
-        switch keyCode {
-        case spaceKeyCode,
-             0...46, 48...52,
-             96...111,
-             123...126:
-            return true
-        default:
-            return false
-        }
     }
 
     static func shouldDismissForMouseEvent(

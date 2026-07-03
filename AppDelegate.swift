@@ -54,7 +54,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             })
         )
         popupController.configure(hostingController: hostingController)
-        popupController.applyBehavior()
         popupController.setContentSize(settings.popupSizePreset.contentSize)
         popupController.onPopupActiveChanged = { [weak self] active in
             guard let self else { return }
@@ -69,7 +68,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         settings.$popupSizePreset
             .dropFirst()
-            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, !self.settings.isUpdatingFromResizeHandle else { return }
                 self.applyPopoverSize(animated: true)
@@ -82,13 +80,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.popupController.retainFocus = self.settings.retainPopupFocus
-                self.popupController.applyBehavior()
                 self.buildContextMenu()
             }
             .store(in: &cancellables)
 
         buildContextMenu()
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 
     func applicationWillTerminate(_ notification: Notification) {}
@@ -256,10 +252,10 @@ struct WebContainerView: NSViewRepresentable {
         container.addSubview(handle)
 
         NSLayoutConstraint.activate([
-            handle.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
-            handle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            handle.widthAnchor.constraint(equalToConstant: 20),
-            handle.heightAnchor.constraint(equalToConstant: 56)
+            handle.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            handle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            handle.widthAnchor.constraint(equalToConstant: 28),
+            handle.heightAnchor.constraint(equalToConstant: 28)
         ])
 
         if let url = URL(string: "https://grok.com/") {
@@ -300,78 +296,74 @@ struct WebContainerView: NSViewRepresentable {
             }
         }
 
-        @available(macOS 14.0, *)
-        func webView(_ webView: WKWebView,
-                     requestMediaCapturePermissionFor origin: WKSecurityOrigin,
-                     initiatedByFrame frame: WKFrameInfo,
-                     type: WKMediaCaptureType,
-                     decisionHandler: @escaping (WKPermissionDecision, WKMediaCaptureType) -> Void) {
-            let host = origin.host.lowercased()
-            if host.hasSuffix("grok.com") || host == "grok.com" {
-                decisionHandler(.grant, type)
-            } else {
-                decisionHandler(.prompt, type)
-            }
-        }
-
         @available(macOS 12.0, *)
         func webView(_ webView: WKWebView,
                      requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                      initiatedByFrame frame: WKFrameInfo,
                      type: WKMediaCaptureType,
                      decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-            let host = origin.host.lowercased()
-            if host.hasSuffix("grok.com") || host == "grok.com" {
-                decisionHandler(.grant)
-            } else {
-                decisionHandler(.prompt)
+            decideMediaCapturePermission(origin: origin, type: type, completion: decisionHandler)
+        }
+
+        private func decideMediaCapturePermission(
+            origin: WKSecurityOrigin,
+            type: WKMediaCaptureType,
+            completion: @escaping (WKPermissionDecision) -> Void
+        ) {
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            if let decision = MediaCapturePermissionPolicy.immediateDecision(
+                host: origin.host,
+                captureType: type,
+                microphoneStatus: status
+            ) {
+                completion(decision)
+                return
+            }
+
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                DispatchQueue.main.async {
+                    completion(granted ? .grant : .deny)
+                }
             }
         }
     }
 }
 
-final class ResizeHandleView: NSVisualEffectView {
+final class ResizeHandleView: NSView {
     private let settings: AppSettings
+    private let backgroundView = NSVisualEffectView()
 
-    private var startContinuousIndex: CGFloat?
-    private var startWindowFrame: NSRect?
+    private var startContentSize: NSSize?
+    private var startMouseLocation: NSPoint?
+    private var resizeVisibleFrame: NSRect?
+    private var pendingFrame: NSRect?
+    private var isFrameUpdateScheduled = false
 
     init(settings: AppSettings) {
         self.settings = settings
         super.init(frame: .zero)
 
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
-        wantsLayer = true
-        layer?.cornerRadius = 10
-        alphaValue = 0.85
+        backgroundView.material = .hudWindow
+        backgroundView.blendingMode = .withinWindow
+        backgroundView.state = .active
+        backgroundView.wantsLayer = true
+        backgroundView.layer?.cornerRadius = 7
+        backgroundView.alphaValue = 0.72
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backgroundView)
 
-        // Three horizontal lines as a drag indicator (like a grip)
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.distribution = .equalSpacing
-        stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-
-        for _ in 0..<3 {
-            let line = NSView()
-            line.wantsLayer = true
-            line.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.5).cgColor
-            line.layer?.cornerRadius = 1.5
-            line.translatesAutoresizingMaskIntoConstraints = false
-            stack.addArrangedSubview(line)
-            NSLayoutConstraint.activate([
-                line.widthAnchor.constraint(equalToConstant: 10),
-                line.heightAnchor.constraint(equalToConstant: 3)
-            ])
-        }
-
+        let grip = CurvedResizeGripView()
+        grip.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.addSubview(grip)
         NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            backgroundView.widthAnchor.constraint(equalToConstant: 20),
+            backgroundView.heightAnchor.constraint(equalToConstant: 20),
+            grip.leadingAnchor.constraint(equalTo: backgroundView.leadingAnchor, constant: 2),
+            grip.bottomAnchor.constraint(equalTo: backgroundView.bottomAnchor, constant: 2),
+            grip.widthAnchor.constraint(equalToConstant: 16),
+            grip.heightAnchor.constraint(equalToConstant: 16)
         ])
 
         let pan = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -383,7 +375,13 @@ final class ResizeHandleView: NSVisualEffectView {
     }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeUpDown)
+        let cursor: NSCursor
+        if #available(macOS 15.0, *) {
+            cursor = .frameResize(position: .bottomLeft, directions: .all)
+        } else {
+            cursor = .resizeUpDown
+        }
+        addCursorRect(bounds, cursor: cursor)
     }
 
     override func updateTrackingAreas() {
@@ -396,75 +394,50 @@ final class ResizeHandleView: NSVisualEffectView {
     override func mouseEntered(with event: NSEvent) {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
-            animator().alphaValue = 1.0
+            backgroundView.animator().alphaValue = 0.95
         }
     }
 
     override func mouseExited(with event: NSEvent) {
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
-            animator().alphaValue = 0.85
+            backgroundView.animator().alphaValue = 0.72
         }
     }
 
     @objc private func handlePan(_ recognizer: NSPanGestureRecognizer) {
         guard let window else { return }
 
-        let presets = PopupSizePreset.allCases.map(\.contentSize)
-        guard presets.count == 4, let screen = window.screen else { return }
-
-        let translation = recognizer.translation(in: self)
-        let scalar = -translation.y
-        let pointsPerPresetStep: CGFloat = 80
-
         switch recognizer.state {
         case .began:
-            startContinuousIndex = CGFloat(settings.popupSizePreset.index)
-            startWindowFrame = window.frame
+            startContentSize = window.frame.size
+            startMouseLocation = NSEvent.mouseLocation
+            resizeVisibleFrame = window.screen?.visibleFrame
 
         case .changed:
-            guard let startIndex = startContinuousIndex else { return }
-
-            let clamped = max(0, min(CGFloat(presets.count - 1), startIndex + (scalar / pointsPerPresetStep)))
-            let lower = Int(floor(clamped))
-            let upper = Int(ceil(clamped))
-            let t = clamped - CGFloat(lower)
-            let a = presets[lower]
-            let b = presets[upper]
-            let interpolated = NSSize(
-                width: a.width + (b.width - a.width) * t,
-                height: a.height + (b.height - a.height) * t
-            )
-            let nextFrame = PopoverPresentationPolicy.panelFrame(
-                visibleFrame: screen.visibleFrame,
-                contentSize: interpolated
-            )
-
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            window.setFrame(nextFrame, display: true)
-            window.contentView?.layoutSubtreeIfNeeded()
-            CATransaction.commit()
+            guard let nextFrame = frameForCurrentMouseLocation() else { return }
+            scheduleFrameUpdate(nextFrame, for: window)
 
         case .ended, .cancelled, .failed:
             defer {
-                startContinuousIndex = nil
-                startWindowFrame = nil
+                startContentSize = nil
+                startMouseLocation = nil
+                resizeVisibleFrame = nil
+                pendingFrame = nil
             }
 
-            guard let startIndex = startContinuousIndex else { return }
-
-            let rawIndex = startIndex + (scalar / pointsPerPresetStep)
-            let snapped = Int(max(0, min(CGFloat(presets.count - 1), rawIndex)).rounded())
-            let preset = PopupSizePreset.from(index: snapped)
+            guard let continuousIndex = continuousIndexForCurrentMouseLocation(),
+                  let visibleFrame = resizeVisibleFrame else { return }
+            flushPendingFrame(for: window)
+            let preset = PopupResizePolicy.snappedPreset(for: continuousIndex)
             let finalFrame = PopoverPresentationPolicy.panelFrame(
-                visibleFrame: screen.visibleFrame,
+                visibleFrame: visibleFrame,
                 contentSize: preset.contentSize
             )
 
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.16
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 window.animator().setFrame(finalFrame, display: true)
             }, completionHandler: {
                 self.settings.updatePresetFromResizeHandle(preset)
@@ -472,6 +445,65 @@ final class ResizeHandleView: NSVisualEffectView {
 
         default:
             break
+        }
+    }
+
+    private func continuousIndexForCurrentMouseLocation() -> CGFloat? {
+        guard let startContentSize, let startMouseLocation else { return nil }
+        let desiredSize = PopupResizePolicy.desiredSize(
+            startingAt: startContentSize,
+            startMouseLocation: startMouseLocation,
+            currentMouseLocation: NSEvent.mouseLocation
+        )
+        return PopupResizePolicy.continuousIndex(for: desiredSize)
+    }
+
+    private func frameForCurrentMouseLocation() -> NSRect? {
+        guard let continuousIndex = continuousIndexForCurrentMouseLocation(),
+              let visibleFrame = resizeVisibleFrame else { return nil }
+        return PopoverPresentationPolicy.panelFrame(
+            visibleFrame: visibleFrame,
+            contentSize: PopupResizePolicy.interpolatedSize(at: continuousIndex)
+        )
+    }
+
+    private func scheduleFrameUpdate(_ frame: NSRect, for window: NSWindow) {
+        pendingFrame = frame
+        guard !isFrameUpdateScheduled else { return }
+        isFrameUpdateScheduled = true
+
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self else { return }
+            self.isFrameUpdateScheduled = false
+            guard let window, let frame = self.pendingFrame else { return }
+            self.pendingFrame = nil
+            window.setFrame(frame, display: false)
+        }
+    }
+
+    private func flushPendingFrame(for window: NSWindow) {
+        guard let pendingFrame else { return }
+        self.pendingFrame = nil
+        window.setFrame(pendingFrame, display: false)
+    }
+}
+
+private final class CurvedResizeGripView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        NSColor.labelColor.withAlphaComponent(0.55).setStroke()
+        for radius in [4, 7, 10] as [CGFloat] {
+            let arc = NSBezierPath()
+            arc.lineWidth = 1.4
+            arc.lineCapStyle = .round
+            arc.appendArc(
+                withCenter: NSPoint(x: 2, y: 2),
+                radius: radius,
+                startAngle: 0,
+                endAngle: 90
+            )
+            arc.stroke()
         }
     }
 }

@@ -12,15 +12,16 @@ let package = Package(
             name: "GrokBar",
             path: ".",
             exclude: [
-                "GrokBar.xcodeproj",
-                "Assets.xcassets",
                 "Info.plist",
                 "README.md",
                 "Tests",
                 "GrokBar.app",
                 "build_app.sh",
+                "build_dmg.sh",
+                "generate_icon.sh",
+                "Icon_GrokBar.icns",
+                "dist",
                 "GrokBar.entitlements",
-                "BundleResources.json",
                 "grok-small.png",
                 "Icon_GrokBar.icon"
             ]
