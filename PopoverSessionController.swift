@@ -3,6 +3,7 @@ import WebKit
 
 final class MenuBarPopupContentController: NSViewController {
     let presentedController: NSViewController
+    private let presentationWrapper = NSView()
 
     init(presentedController: NSViewController) {
         self.presentedController = presentedController
@@ -17,19 +18,33 @@ final class MenuBarPopupContentController: NSViewController {
         let clippingView = NSView()
         clippingView.wantsLayer = true
         clippingView.layer?.masksToBounds = true
+        clippingView.layer?.backgroundColor = NSColor.clear.cgColor
         view = clippingView
+
+        presentationWrapper.translatesAutoresizingMaskIntoConstraints = false
+        clippingView.addSubview(presentationWrapper)
 
         addChild(presentedController)
         let presentedView = presentedController.view
         presentedView.translatesAutoresizingMaskIntoConstraints = false
-        clippingView.addSubview(presentedView)
+        presentationWrapper.addSubview(presentedView)
 
         NSLayoutConstraint.activate([
-            presentedView.leadingAnchor.constraint(equalTo: clippingView.leadingAnchor),
-            presentedView.trailingAnchor.constraint(equalTo: clippingView.trailingAnchor),
-            presentedView.topAnchor.constraint(equalTo: clippingView.topAnchor),
-            presentedView.bottomAnchor.constraint(equalTo: clippingView.bottomAnchor)
+            presentationWrapper.leadingAnchor.constraint(equalTo: clippingView.leadingAnchor),
+            presentationWrapper.trailingAnchor.constraint(equalTo: clippingView.trailingAnchor),
+            presentationWrapper.topAnchor.constraint(equalTo: clippingView.topAnchor),
+            presentationWrapper.bottomAnchor.constraint(equalTo: clippingView.bottomAnchor),
+
+            presentedView.leadingAnchor.constraint(equalTo: presentationWrapper.leadingAnchor),
+            presentedView.trailingAnchor.constraint(equalTo: presentationWrapper.trailingAnchor),
+            presentedView.topAnchor.constraint(equalTo: presentationWrapper.topAnchor),
+            presentedView.bottomAnchor.constraint(equalTo: presentationWrapper.bottomAnchor)
         ])
+    }
+
+    var presentationContentView: NSView {
+        _ = view
+        return presentationWrapper
     }
 
     var presentedView: NSView {
@@ -45,10 +60,6 @@ final class MenuBarPopupPanel: NSPanel {
     var spaceKeyHandler: (() -> Bool)?
     private var popupContentController: MenuBarPopupContentController?
 
-    var presentationContentView: NSView? {
-        popupContentController?.presentedView
-    }
-
     init(contentSize: NSSize) {
         super.init(
             contentRect: NSRect(origin: .zero, size: contentSize),
@@ -63,8 +74,12 @@ final class MenuBarPopupPanel: NSPanel {
         becomesKeyOnlyIfNeeded = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         titlebarAppearsTransparent = true
+    }
+
+    var presentationContentView: NSView? {
+        popupContentController?.presentationContentView
     }
 
     func setPresentedContentController(_ controller: NSViewController) {
@@ -130,7 +145,10 @@ final class PopoverSessionController: NSObject {
 
     func setContentSize(_ size: NSSize) {
         if let panel, isPopupActive {
-            panel.setFrame(anchoredFrame(contentSize: size, screen: panel.screen), display: true)
+            PopupResizePolicy.applyLiveResizeFrame(
+                anchoredFrame(contentSize: size, screen: panel.screen),
+                to: panel
+            )
         }
     }
 
@@ -234,7 +252,6 @@ final class PopoverSessionController: NSObject {
     func processMonitoredKeyDown(keyCode: UInt16) -> Bool {
         switch handleLocalKeyDown(keyCode: keyCode) {
         case .passThrough:
-            establishTypingFocus()
             return true
         case .consumeAndInsertSpace:
             _ = handleSpaceKeyEvent()

@@ -9,7 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let popupController: PopoverSessionController
     private var contextMenu: NSMenu = NSMenu()
     private weak var webViewRef: WKWebView?
-    private let settings = AppSettings()
+    let settings = AppSettings()
     private var cancellables = Set<AnyCancellable>()
 
     override init() {
@@ -158,7 +158,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applyPopoverSize(animated: Bool) {
         let targetContentSize = settings.popupSizePreset.contentSize
-        popupController.setContentSize(targetContentSize)
 
         guard popupController.isShown,
               let window = popupController.presentationWindow,
@@ -172,13 +171,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
+            NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.18
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 window.animator().setFrame(nextFrame, display: true)
-            }
+            }, completionHandler: {
+                PopupResizePolicy.refreshAfterAnimatedResize(in: window)
+            })
         } else {
-            window.setFrame(nextFrame, display: true)
+            popupController.setContentSize(targetContentSize)
         }
     }
 
@@ -230,10 +231,10 @@ struct WebContainerView: NSViewRepresentable {
         webView.customUserAgent = nil
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
-        webView.setValue(false, forKey: "drawsBackground")
+        PopupChromeStyle.configureWebViewBackground(webView)
         onCreate?(webView)
 
-        let container = NSView(frame: .zero)
+        let container = PopupChromeContainerView(frame: .zero)
         container.translatesAutoresizingMaskIntoConstraints = false
         PopupChromeStyle.apply(to: container)
 
@@ -420,15 +421,19 @@ final class ResizeHandleView: NSView {
 
         case .ended, .cancelled, .failed:
             defer {
+                isFrameUpdateScheduled = false
                 startContentSize = nil
                 startMouseLocation = nil
                 resizeVisibleFrame = nil
                 pendingFrame = nil
             }
 
+            // Always apply the last coalesced drag frame before snapping to a preset,
+            // even when tracking data is missing (e.g. gesture cancelled early).
+            flushPendingFrame(for: window)
+
             guard let continuousIndex = continuousIndexForCurrentMouseLocation(),
                   let visibleFrame = resizeVisibleFrame else { return }
-            flushPendingFrame(for: window)
             let preset = PopupResizePolicy.snappedPreset(for: continuousIndex)
             let finalFrame = PopoverPresentationPolicy.panelFrame(
                 visibleFrame: visibleFrame,
@@ -440,6 +445,7 @@ final class ResizeHandleView: NSView {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 window.animator().setFrame(finalFrame, display: true)
             }, completionHandler: {
+                PopupResizePolicy.refreshAfterAnimatedResize(in: window)
                 self.settings.updatePresetFromResizeHandle(preset)
             })
 
@@ -467,6 +473,14 @@ final class ResizeHandleView: NSView {
         )
     }
 
+    func enqueueCoalescedFrameUpdate(_ frame: NSRect, for window: NSWindow) {
+        scheduleFrameUpdate(frame, for: window)
+    }
+
+    func applyPendingFrameForTesting(for window: NSWindow) {
+        flushPendingFrame(for: window)
+    }
+
     private func scheduleFrameUpdate(_ frame: NSRect, for window: NSWindow) {
         pendingFrame = frame
         guard !isFrameUpdateScheduled else { return }
@@ -477,14 +491,14 @@ final class ResizeHandleView: NSView {
             self.isFrameUpdateScheduled = false
             guard let window, let frame = self.pendingFrame else { return }
             self.pendingFrame = nil
-            window.setFrame(frame, display: false)
+            PopupResizePolicy.applyLiveResizeFrame(frame, to: window)
         }
     }
 
     private func flushPendingFrame(for window: NSWindow) {
         guard let pendingFrame else { return }
         self.pendingFrame = nil
-        window.setFrame(pendingFrame, display: false)
+        PopupResizePolicy.applyLiveResizeFrame(pendingFrame, to: window)
     }
 }
 

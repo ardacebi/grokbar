@@ -84,7 +84,6 @@ enum PopupPresentationAnimation {
         from.frame = finalFrame
         let to = restingState(for: finalFrame)
 
-        panel.hasShadow = false
         applyPresentationState(from, to: panel)
         panel.orderFront(nil)
         onPresented?()
@@ -95,10 +94,7 @@ enum PopupPresentationAnimation {
             to: to,
             perceptualDuration: openPerceptualDuration,
             bounce: springBounce,
-            completion: {
-                panel.hasShadow = true
-                completion()
-            }
+            completion: completion
         )
     }
 
@@ -110,7 +106,6 @@ enum PopupPresentationAnimation {
         let closing = closingEndState(from: finalFrame)
         let from = dismissStartState(for: panel, finalFrame: finalFrame)
 
-        panel.hasShadow = false
         applyPresentationState(from, to: panel)
 
         runSpringPresentation(
@@ -122,7 +117,6 @@ enum PopupPresentationAnimation {
             completion: {
                 panel.orderOut(nil)
                 resetContentTransform(in: panel)
-                panel.hasShadow = true
                 completion()
             }
         )

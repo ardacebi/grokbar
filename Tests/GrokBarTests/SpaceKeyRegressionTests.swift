@@ -38,6 +38,18 @@ final class SpaceKeyRegressionTests: XCTestCase {
         XCTAssertTrue(controller.isPopupActive)
     }
 
+    func testMonitoredKeyDownPassesThroughTypingWithoutClosing() {
+        let controller = configuredController(retainFocus: false)
+        let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!
+        controller.show(relativeTo: button, contentSize: NSSize(width: 420, height: 640))
+
+        let passesThrough = controller.processMonitoredKeyDown(keyCode: 0)
+
+        XCTAssertTrue(passesThrough)
+        XCTAssertEqual(controller.closeInvocationCount, 0)
+        XCTAssertTrue(controller.isPopupActive)
+    }
+
     func testMonitoredKeyDownStillClosesOnEscape() {
         let controller = configuredController(retainFocus: false)
         let button = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength).button!

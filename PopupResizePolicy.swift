@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 enum PopupResizePolicy {
     static let presets = PopupSizePreset.allCases.map(\.contentSize)
@@ -68,5 +69,26 @@ enum PopupResizePolicy {
 
     static func snappedPreset(for continuousIndex: CGFloat) -> PopupSizePreset {
         PopupSizePreset.from(index: Int(continuousIndex.rounded()))
+    }
+
+    static func applyLiveResizeFrame(_ frame: NSRect, to window: NSWindow) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        window.setFrame(frame, display: true)
+        refreshAfterResize(in: window)
+        CATransaction.commit()
+    }
+
+    static func refreshAfterAnimatedResize(in window: NSWindow) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        refreshAfterResize(in: window)
+        CATransaction.commit()
+    }
+
+    private static func refreshAfterResize(in window: NSWindow) {
+        guard let contentView = window.contentView else { return }
+        contentView.layoutSubtreeIfNeeded()
+        contentView.displayIfNeeded()
     }
 }

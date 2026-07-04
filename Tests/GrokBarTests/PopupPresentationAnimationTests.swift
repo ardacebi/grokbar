@@ -13,6 +13,22 @@ final class PopupPresentationAnimationTests: XCTestCase {
         return panel
     }
 
+    private func makeMenuBarPopupPanel() -> MenuBarPopupPanel {
+        let contentController = NSViewController()
+        contentController.view = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
+        let panel = MenuBarPopupPanel(contentSize: NSSize(width: 420, height: 640))
+        panel.setPresentedContentController(contentController)
+        _ = panel.contentView
+        return panel
+    }
+
+    private func presentationLayer(in panel: NSWindow) -> CALayer? {
+        if let popupPanel = panel as? MenuBarPopupPanel {
+            return popupPanel.presentationContentView?.layer
+        }
+        return panel.contentView?.layer
+    }
+
     func testOpeningKeepsPanelFixedAndOffsetsContentFromRight() {
         let finalFrame = NSRect(x: 100, y: 200, width: 420, height: 640)
         let start = PopupPresentationAnimation.openingStartState(finalFrame: finalFrame)
@@ -72,6 +88,54 @@ final class PopupPresentationAnimationTests: XCTestCase {
         XCTAssertLessThan(mid.alpha, to.alpha + 0.01)
     }
 
+    func testPresentKeepsPanelChromeFreeOfShadowDuringAnimation() {
+        let panel = makeMenuBarPopupPanel()
+        let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
+
+        let midExpectation = expectation(description: "mid present")
+        let doneExpectation = expectation(description: "present completes")
+        PopupPresentationAnimation.present(panel, finalFrame: finalFrame, completion: {
+            doneExpectation.fulfill()
+        })
+
+        XCTAssertFalse(panel.hasShadow)
+        XCTAssertEqual(panel.contentView?.layer?.backgroundColor, NSColor.clear.cgColor)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) {
+            XCTAssertFalse(panel.hasShadow)
+            midExpectation.fulfill()
+        }
+
+        wait(for: [midExpectation, doneExpectation], timeout: 2.0)
+        XCTAssertFalse(panel.hasShadow)
+    }
+
+    func testDismissKeepsPanelChromeFreeOfShadowDuringAnimation() {
+        let panel = makeMenuBarPopupPanel()
+        let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
+
+        panel.setFrame(finalFrame, display: true)
+        panel.alphaValue = 1
+        panel.orderFront(nil)
+
+        let midExpectation = expectation(description: "mid dismiss")
+        let doneExpectation = expectation(description: "dismiss completes")
+
+        PopupPresentationAnimation.dismiss(panel, finalFrame: finalFrame) {
+            doneExpectation.fulfill()
+        }
+
+        XCTAssertFalse(panel.hasShadow)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) {
+            XCTAssertFalse(panel.hasShadow)
+            midExpectation.fulfill()
+        }
+
+        wait(for: [midExpectation, doneExpectation], timeout: 2.0)
+        XCTAssertFalse(panel.hasShadow)
+    }
+
     func testPresentStartsWithContentOffsetInsideFinalFrame() {
         let panel = makePanel()
         let finalFrame = NSRect(x: 200, y: 300, width: 420, height: 640)
@@ -84,7 +148,7 @@ final class PopupPresentationAnimationTests: XCTestCase {
 
         XCTAssertEqual(panel.frame.origin.x, finalFrame.origin.x, accuracy: 1.0)
         XCTAssertEqual(
-            panel.contentView?.layer?.transform.m41 ?? 0,
+            presentationLayer(in: panel)?.transform.m41 ?? 0,
             expectedStart.contentOffsetX,
             accuracy: 2.0
         )
@@ -108,7 +172,7 @@ final class PopupPresentationAnimationTests: XCTestCase {
         })
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            let offset = panel.contentView?.layer?.transform.m41 ?? 0
+            let offset = self.presentationLayer(in: panel)?.transform.m41 ?? 0
             XCTAssertEqual(panel.frame, finalFrame)
             XCTAssertGreaterThan(offset, 0)
             XCTAssertLessThan(offset, start.contentOffsetX)
@@ -129,13 +193,13 @@ final class PopupPresentationAnimationTests: XCTestCase {
         })
 
         XCTAssertEqual(
-            panel.contentView?.layer?.transform.m11 ?? 1,
+            presentationLayer(in: panel)?.transform.m11 ?? 1,
             PopupPresentationAnimation.presentationScale,
             accuracy: 0.005
         )
 
         wait(for: [doneExpectation], timeout: 2.0)
-        XCTAssertEqual(panel.contentView?.layer?.transform.m11 ?? 1, 1, accuracy: 0.001)
+        XCTAssertEqual(presentationLayer(in: panel)?.transform.m11 ?? 1, 1, accuracy: 0.001)
     }
 
     func testDismissInterruptsInFlightPresent() {
@@ -197,12 +261,12 @@ final class PopupPresentationAnimationTests: XCTestCase {
         PopupPresentationAnimation.dismiss(panel, finalFrame: finalFrame, completion: {})
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            let offsetBeforeReopen = panel.contentView?.layer?.transform.m41 ?? 0
+            let offsetBeforeReopen = self.presentationLayer(in: panel)?.transform.m41 ?? 0
             PopupPresentationAnimation.present(panel, finalFrame: finalFrame, completion: {
                 interruptedExpectation.fulfill()
             })
 
-            let offsetAfterReopen = panel.contentView?.layer?.transform.m41 ?? 0
+            let offsetAfterReopen = self.presentationLayer(in: panel)?.transform.m41 ?? 0
             XCTAssertEqual(panel.frame, finalFrame)
             XCTAssertGreaterThan(offsetBeforeReopen, 0)
             XCTAssertLessThan(offsetBeforeReopen, finalFrame.width)
@@ -247,11 +311,10 @@ final class PopupPresentationAnimationTests: XCTestCase {
 
         XCTAssertEqual(panel.frame, finalFrame)
         XCTAssertFalse(panel.frame.intersects(adjacentScreenFrame))
-        XCTAssertEqual(panel.contentView?.layer?.masksToBounds, true)
+        XCTAssertEqual(panel.contentView?.layer?.backgroundColor, NSColor.clear.cgColor)
         XCTAssertFalse(panel.hasShadow)
 
         wait(for: [completion], timeout: 2.0)
-        XCTAssertTrue(panel.hasShadow)
     }
 
     func testPresentCallsOnPresentedBeforeCompletion() {
@@ -285,6 +348,17 @@ final class PopupPresentationAnimationTests: XCTestCase {
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
         PopupChromeStyle.apply(to: view)
         XCTAssertEqual(view.layer?.cornerRadius, PopupChromeStyle.cornerRadius)
-        XCTAssertNotNil(view.layer?.backgroundColor)
+        XCTAssertEqual(view.layer?.backgroundColor, NSColor.clear.cgColor)
+    }
+
+    func testClippingViewStaysClearSoSlideAnimationDoesNotShowBlackPlate() {
+        let contentController = NSViewController()
+        contentController.view = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
+        let panel = MenuBarPopupPanel(contentSize: NSSize(width: 200, height: 300))
+        panel.setPresentedContentController(contentController)
+        _ = panel.contentView
+
+        XCTAssertEqual(panel.contentView?.layer?.backgroundColor, NSColor.clear.cgColor)
+        XCTAssertFalse(panel.hasShadow)
     }
 }

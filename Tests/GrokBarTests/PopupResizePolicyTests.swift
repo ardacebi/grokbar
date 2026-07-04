@@ -1,6 +1,22 @@
 import XCTest
 import Combine
+import WebKit
 @testable import GrokBar
+
+private final class LayoutDisplayTrackingView: NSView {
+    private(set) var layoutCount = 0
+    private(set) var displayCount = 0
+
+    override func layoutSubtreeIfNeeded() {
+        layoutCount += 1
+        super.layoutSubtreeIfNeeded()
+    }
+
+    override func displayIfNeeded() {
+        displayCount += 1
+        super.displayIfNeeded()
+    }
+}
 
 final class PopupResizePolicyTests: XCTestCase {
     func testDraggingBottomLeftDownAndLeftGrowsPopup() {
@@ -51,6 +67,52 @@ final class PopupResizePolicyTests: XCTestCase {
     func testContinuousIndexSnapsToNearestPreset() {
         XCTAssertEqual(PopupResizePolicy.snappedPreset(for: 1.49), .smallMid)
         XCTAssertEqual(PopupResizePolicy.snappedPreset(for: 1.51), .mid)
+    }
+
+    func testApplyLiveResizeFrameUpdatesWindowAndLaysOutContent() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 640),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        let contentView = LayoutDisplayTrackingView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
+        let childView = LayoutDisplayTrackingView(frame: NSRect(x: 0, y: 0, width: 420, height: 640))
+        contentView.addSubview(childView)
+        window.contentView = contentView
+
+        let nextFrame = NSRect(x: 100, y: 200, width: 480, height: 740)
+        PopupResizePolicy.applyLiveResizeFrame(nextFrame, to: window)
+
+        XCTAssertEqual(window.frame, nextFrame)
+        XCTAssertEqual(contentView.bounds.size, nextFrame.size)
+        XCTAssertGreaterThan(contentView.layoutCount, 0)
+        XCTAssertGreaterThan(contentView.displayCount, 0)
+        XCTAssertEqual(childView.displayCount, 0)
+    }
+
+    func testApplyLiveResizeFrameWithNilContentViewDoesNotCrash() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 640),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = nil
+
+        let nextFrame = NSRect(x: 100, y: 200, width: 480, height: 740)
+        PopupResizePolicy.applyLiveResizeFrame(nextFrame, to: window)
+
+        XCTAssertEqual(window.frame, nextFrame)
+    }
+
+    func testWebViewBackgroundStaysClear() {
+        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        PopupChromeStyle.configureWebViewBackground(webView)
+
+        let configured = webView.underPageBackgroundColor?.usingColorSpace(.sRGB)
+        XCTAssertNotNil(configured)
+        XCTAssertEqual(configured?.alphaComponent ?? -1, 0.0, accuracy: 0.01)
     }
 
     func testResizePresetPublicationIsMarkedAsHandleDriven() {

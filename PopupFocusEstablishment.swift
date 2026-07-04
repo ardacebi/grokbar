@@ -9,8 +9,14 @@ enum PopupFocusEstablishment {
     ) -> Bool {
         guard let window else { return false }
 
-        NSApp.activate(ignoringOtherApps: true)
+        if let webView, window.firstResponder === webView {
+            if window.isKeyWindow { return true }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            return window.isKeyWindow
+        }
 
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
 
         if let webView {
